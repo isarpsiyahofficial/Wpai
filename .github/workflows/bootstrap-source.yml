@@ -1,0 +1,41 @@
+name: Bootstrap source tree
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.bootstrap/manifest.json]
+
+permissions:
+  contents: write
+
+env:
+  EXPECTED_SHA256: c2129573ab803d620f161ae6892cc88392f3d0c6af9d4312ff9fe6e670db064e
+
+jobs:
+  expand:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Reconstruct and verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/payload.part* | base64 --decode > /tmp/wpai-source.tar.gz
+          echo "$EXPECTED_SHA256  /tmp/wpai-source.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/wpai-source
+          tar -xzf /tmp/wpai-source.tar.gz -C /tmp/wpai-source
+      - name: Replace bootstrap payload with real source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bootstrap .github/workflows/bootstrap-source.yml
+          cp -a /tmp/wpai-source/. .
+          git config user.name "Wpai Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: build production Wpai platform"
+          git push origin HEAD:agent/wpai-production-rebuild
