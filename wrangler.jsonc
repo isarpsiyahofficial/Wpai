@@ -1,0 +1,58 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "wa-ai-panel",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist/web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health", "/webhooks/*"]
+  },
+  "vars": {
+    "APP_ENV": "production",
+    "DEFAULT_TIMEZONE": "Europe/Istanbul",
+    "META_GRAPH_API_VERSION": "v23.0",
+    "DEFAULT_AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
+    "DEFAULT_EMBEDDING_MODEL": "@cf/baai/bge-m3",
+    "CLOUDFLARE_ACCOUNT_ID": "ad8e99c82c6c17d823f6877ff1efade4",
+    "PROJECT_MANIFEST_VERSION": "1"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wa-ai-prod",
+      "database_id": "81983219-f57b-487b-8144-7c70bf9b1fe2",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "wa-ai-files-prod" }
+  ],
+  "ai": { "binding": "AI" },
+  "vectorize": [
+    { "binding": "KNOWLEDGE_INDEX", "index_name": "wpai-knowledge" }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "INBOUND_AI", "queue": "wa-inbound-ai" },
+      { "binding": "OUTBOUND", "queue": "wa-outbound" },
+      { "binding": "ADMIN_NOTIFY", "queue": "wa-admin-notify" },
+      { "binding": "AI_DLQ", "queue": "wa-ai-dlq" },
+      { "binding": "OUTBOUND_DLQ", "queue": "wa-outbound-dlq" }
+    ],
+    "consumers": [
+      { "queue": "wa-inbound-ai", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 4, "dead_letter_queue": "wa-ai-dlq" },
+      { "queue": "wa-outbound", "max_batch_size": 10, "max_batch_timeout": 2, "max_retries": 5, "dead_letter_queue": "wa-outbound-dlq" },
+      { "queue": "wa-admin-notify", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 4, "dead_letter_queue": "wa-outbound-dlq" }
+    ]
+  },
+  "triggers": { "crons": ["*/5 * * * *", "15 2 * * *"] },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": { "enabled": true, "invocation_logs": false }
+  }
+}
