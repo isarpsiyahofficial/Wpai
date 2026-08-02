@@ -1,0 +1,45 @@
+{
+  "name": "wpai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "dev": "concurrently -k -n WEB,WORKER \"vite\" \"wrangler dev\"",
+    "build:web": "vite build",
+    "build": "npm run build:web && wrangler deploy --dry-run --outdir dist/worker",
+    "types": "wrangler types worker-configuration.d.ts",
+    "typecheck": "npm run types && tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "dev:desktop": "tauri dev",
+    "build:desktop": "tauri build",
+    "infra:scan": "node scripts/cloudflare-reconcile.mjs scan",
+    "infra:repair": "node scripts/cloudflare-reconcile.mjs repair",
+    "db:local": "wrangler d1 migrations apply wpai-prod --local",
+    "db:remote": "wrangler d1 migrations apply wpai-prod --remote"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.7.2",
+    "hono": "^4.9.8",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250726.0",
+    "@tauri-apps/cli": "^2.8.4",
+    "@types/node": "^22.17.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.32.0"
+  }
+}
