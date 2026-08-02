@@ -1,0 +1,18 @@
+INSERT OR IGNORE INTO system_settings (key, value_json, updated_at) VALUES
+  ('ai_global_mode', '"off"', CURRENT_TIMESTAMP),
+  ('ai_auto_reply_enabled', 'false', CURRENT_TIMESTAMP),
+  ('ai_suggestion_mode', 'true', CURRENT_TIMESTAMP),
+  ('ai_paused_until', 'null', CURRENT_TIMESTAMP),
+  ('admin_notifications_enabled', 'false', CURRENT_TIMESTAMP),
+  ('meta_connection_enabled', 'false', CURRENT_TIMESTAMP),
+  ('ai_recent_message_count', '10', CURRENT_TIMESTAMP),
+  ('ai_minimum_confidence', '0.82', CURRENT_TIMESTAMP),
+  ('ai_debounce_seconds', '6', CURRENT_TIMESTAMP),
+  ('ai_business_instructions', '"Kayıtlı olmayan fiyat, süre, özellik veya politika uydurma. Başka müşterilerin hiçbir bilgisini paylaşma. Emin olmadığın, pazarlık, resmî teklif, ödeme, sözleşme, hukuki konu veya şikâyet içeren durumlarda insana devret."', CURRENT_TIMESTAMP),
+  ('ai_handoff_rules', '["Ciddi fiyat pazarlığı","Özel indirim talebi","Resmî teklif isteği","Ödeme veya sözleşme konusu","Hukuki soru","Şikâyet veya öfkeli müşteri","Kayıtlı olmayan özel geliştirme","AI emin değil","Telefon görüşmesi talebi"]', CURRENT_TIMESTAMP),
+  ('campaigns_enabled', 'false', CURRENT_TIMESTAMP),
+  ('external_research_enabled', 'false', CURRENT_TIMESTAMP),
+  ('max_upload_bytes', '26214400', CURRENT_TIMESTAMP),
+  ('default_country', '"TR"', CURRENT_TIMESTAMP),
+  ('timezone', '"Europe/Istanbul"', CURRENT_TIMESTAMP),
+  ('project_manifest_version', '"1"', CURRENT_TIMESTAMP);
