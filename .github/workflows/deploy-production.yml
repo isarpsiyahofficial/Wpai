@@ -1,0 +1,78 @@
+name: Deploy WPAI Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY-WPAI to confirm production deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ad8e99c82c6c17d823f6877ff1efade4
+  WORKER_URL: https://wa-ai-panel.wa-ai-panel.workers.dev
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirm == 'DEPLOY-WPAI' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Full quality gate
+        run: |
+          npm run security:scan
+          npm run validate
+          npm run typecheck
+          npm run test
+          npm run build
+          npm run deploy:dry
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Verify exact Cloudflare identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          result=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}")
+          node -e 'const x=JSON.parse(process.argv[1]); if(!x.success||x.result.id!==process.env.CLOUDFLARE_ACCOUNT_ID) process.exit(1)' "$result"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Apply production D1 migrations
+        run: npm run db:remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Deploy Worker and web assets
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Verify production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            status=$(curl --silent --output /tmp/health.json --write-out '%{http_code}' "$WORKER_URL/health" || true)
+            if [ "$status" = "200" ]; then
+              node -e 'const x=require("/tmp/health.json"); if(!x.ok||!x.components.worker||!x.components.d1||!x.components.r2Binding||!x.components.queuesBinding||!x.components.workersAiBinding) process.exit(1)'
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Production health did not become ready.' >&2
+          exit 1
+        env:
+          WORKER_URL: ${{ env.WORKER_URL }}
