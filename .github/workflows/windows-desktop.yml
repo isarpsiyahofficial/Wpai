@@ -31,15 +31,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      - name: Install JavaScript dependencies
+      - name: Install locked JavaScript dependencies
         shell: pwsh
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Install FAISS sidecar dependencies
         shell: pwsh
         run: |
