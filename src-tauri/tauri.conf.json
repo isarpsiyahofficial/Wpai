@@ -41,7 +41,7 @@
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
         "displayLanguageSelector": true,
-        "installerMode": "currentUser",
+        "installMode": "currentUser",
         "languages": ["Turkish", "English"]
       }
     }
