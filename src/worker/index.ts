@@ -38,6 +38,7 @@ app.get('/health', async c => {
   }, d1 ? 200 : 503);
 });
 
+app.all('/api/attachments/:id', c => c.json({ ok: false, error: { code: 'SCOPED_FILE_ROUTE_REQUIRED', message: 'Dosya erişimi için konuşma kimliği gereklidir.', requestId: c.get('requestId') } }, 410));
 app.route('/api/auth', authRoutes);
 app.route('/api', apiRoutes);
 app.route('/api', extendedApiRoutes);
