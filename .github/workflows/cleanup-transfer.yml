@@ -1,0 +1,30 @@
+name: Remove temporary transfer artifacts
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.cleanup-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Remove transfer-only content
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bootstrap .source-bootstrap .cleanup-trigger
+          rm -f .github/workflows/bootstrap-source.yml .github/workflows/cleanup-transfer.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: remove temporary source transfer artifacts"
+          git push origin HEAD:agent/wpai-production-rebuild
