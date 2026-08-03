@@ -16,7 +16,7 @@ async function seedConversation(options:{aiMode?:string;human?:number;phone?:str
   const contactId=crypto.randomUUID(),conversationId=crypto.randomUUID();const now=new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("INSERT INTO contacts (id,phone_e164,display_name,country_code,source,status,created_at,updated_at) VALUES (?,?,?,'TR','test','lead',?,?)").bind(contactId,options.phone??'+905326660001','Queue Test',now,now),
-    env.DB.prepare("INSERT INTO conversations (id,contact_id,status,ai_mode,human_takeover,last_inbound_at,last_message_at,created_at,updated_at) VALUES (?,?,'open',?,?,?, ?,?,?)").bind(conversationId,options.aiMode??'suggestion',options.human??0,now,now,now,now)
+    env.DB.prepare("INSERT INTO conversations (id,contact_id,status,ai_mode,human_takeover,last_inbound_at,last_message_at,created_at,updated_at) VALUES (?,?,'open',?,?,?,?,?,?,?)").bind(conversationId,contactId,options.aiMode??'suggestion',options.human??0,now,now,now,now)
   ]);
   return{contactId,conversationId,now};
 }
@@ -63,7 +63,7 @@ describe('outbound and notification queues',()=>{
 
 describe('inbound AI queue',()=>{
   async function seedInbound(reply:string){
-    const seeded=await seedConversation({aiMode:'auto',phone:'+905326660004'});await env.DB.prepare("UPDATE system_settings SET value_json='\"auto\"' WHERE key='ai_global_mode'").run();await env.DB.prepare("UPDATE system_settings SET value_json='true' WHERE key='ai_auto_reply_enabled'").run();
+    const seeded=await seedConversation({aiMode:'auto',phone:'+905326660004'});await env.DB.prepare("UPDATE system_settings SET value_json='\"auto\"' WHERE key='ai_global_mode'").run();await env.DB.prepare("UPDATE system_settings SET value_json='true' WHERE key='ai_auto_reply_enabled'").run();await env.DB.prepare("UPDATE system_settings SET value_json='4' WHERE key='ai_summary_message_interval'").run();
     const messageIds:string[]=[];for(let index=0;index<4;index+=1){const id=crypto.randomUUID();messageIds.push(id);const created=new Date(Date.now()+index*1000).toISOString();await env.DB.prepare("INSERT INTO messages (id,conversation_id,contact_id,direction,sender_type,message_type,text_content,delivery_status,received_at,created_at) VALUES (?,?,?,'inbound','customer','text',?,'delivered',?,?)").bind(id,seeded.conversationId,seeded.contactId,index===3?'Bütçem nedir?':`Mesaj ${index}`,created,created).run();}
     const sourceMessageId=messageIds[3]!,jobId=crypto.randomUUID();await env.DB.prepare("UPDATE conversations SET last_message_at=?,current_context_version=4 WHERE id=?").bind(new Date(Date.now()+3000).toISOString(),seeded.conversationId).run();await env.DB.prepare("INSERT INTO ai_jobs (id,conversation_id,contact_id,source_message_id,status,expected_context_version,created_at,updated_at) VALUES (?,?,?,?,'queued',4,?,?)").bind(jobId,seeded.conversationId,seeded.contactId,sourceMessageId,seeded.now,seeded.now).run();
     vi.spyOn(env.AI,'run').mockImplementation(async(_model,input:any)=>'text' in input?({data:[[1,0,0]],usage:{input_tokens:10}} as never):({response:JSON.stringify({action:'reply',intent:'price_question',confidence:.99,needs_human:false,needs_research:false,should_notify_admin:false,note_updates:[{text:'Kurumsal site istiyor'}],requirement_updates:{sector:'Hizmet',website_type:'kurumsal',budget_min:12000,unknown_field:'ignore'},reply}),usage:{prompt_tokens:100,completion_tokens:20}} as never));
