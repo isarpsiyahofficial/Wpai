@@ -27,7 +27,8 @@ def validate_files() -> None:
         "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx",
         "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
         "src/frontend/pages/dashboardReports.tsx", "src/frontend/pages/index.ts",
-        "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs", "sidecar/faiss_service.py",
+        "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs",
+        "sidecar/faiss_service.py", "sidecar/requirements.txt",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
         "migrations/0005_runtime_hardening.sql", "migrations/0006_ai_usage_and_summary_settings.sql",
         "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
@@ -37,10 +38,11 @@ def validate_files() -> None:
         assert_file(item)
     forbidden = [
         ROOT / ".bootstrap", ROOT / ".source-bootstrap", ROOT / ".completion-patch-trigger",
-        ROOT / ".ai-state-trigger", ROOT / ".package-lock-trigger",
+        ROOT / ".ai-state-trigger", ROOT / ".package-lock-trigger", ROOT / ".cargo-lock-trigger",
         ROOT / ".github/workflows/apply-completion-patch.yml",
         ROOT / ".github/workflows/one-shot-ai-state.yml",
-        ROOT / ".github/workflows/generate-package-lock.yml"
+        ROOT / ".github/workflows/generate-package-lock.yml",
+        ROOT / ".github/workflows/generate-cargo-lock.yml"
     ]
     for path in forbidden:
         if path.exists():
@@ -68,6 +70,18 @@ def validate_package_lock() -> None:
         raise AssertionError("CI and deployment workflows must install JavaScript dependencies with npm ci")
     if workflows.count("npm ci") < 4:
         raise AssertionError("Locked npm installs are missing from one or more workflows")
+
+
+def validate_cargo_lock() -> None:
+    cargo_lock = (ROOT / "src-tauri/Cargo.lock").read_text("utf-8")
+    if not re.search(r"(?m)^version = 3$", cargo_lock):
+        raise AssertionError("src-tauri/Cargo.lock must use lockfile version 3")
+    for package in ("wpai-desktop", "tauri", "tauri-build", "keyring"):
+        if f'name = "{package}"' not in cargo_lock:
+            raise AssertionError(f"Cargo.lock package missing: {package}")
+    windows_workflow = (ROOT / ".github/workflows/windows-desktop.yml").read_text("utf-8")
+    if "cargo check --locked --manifest-path src-tauri/Cargo.toml" not in windows_workflow:
+        raise AssertionError("Windows workflow must verify Rust dependencies with cargo check --locked")
 
 
 def validate_wrangler() -> None:
@@ -172,7 +186,8 @@ def validate_product_scope() -> None:
 if __name__ == "__main__":
     validate_files()
     validate_package_lock()
+    validate_cargo_lock()
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: locked dependencies, files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
+    print("Static validation passed: locked npm/Rust dependencies, files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
