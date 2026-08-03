@@ -1,0 +1,40 @@
+name: Patch money raw value
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.money-raw-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Strip sentence separators from recorded claims
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/worker/ai.ts')
+          text = path.read_text('utf-8')
+          old = "claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0] });"
+          new = "claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0].trim().replace(/[.,]+$/, '') });"
+          if text.count(old) != 1:
+              raise SystemExit('Raw claim patch target mismatch')
+          path.write_text(text.replace(old, new), 'utf-8')
+      - name: Commit verified patch and remove one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .money-raw-trigger .github/workflows/patch-money-raw.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: normalize recorded monetary claim text"
+          git push origin HEAD:agent/wpai-production-rebuild
