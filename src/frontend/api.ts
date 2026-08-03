@@ -1,14 +1,45 @@
 import type { ApiResponse } from '../shared/contracts';
+import type { Admin } from './types';
+import { desktop } from './desktop';
 
+const DESKTOP_API_BASE = 'https://wa-ai-panel.wa-ai-panel.workers.dev';
 let csrfToken = '';
+let desktopAccessToken = '';
+let desktopAccessExpiresAt = 0;
+let refreshPromise: Promise<DesktopSession> | null = null;
+
+export type DesktopSession = {
+  admin: Admin;
+  deviceId: string;
+  accessToken: string;
+  refreshToken: string;
+  accessExpiresAt: string;
+  refreshExpiresAt: string;
+};
+
 export function setCsrfToken(value: string): void { csrfToken = value; }
 export function getCsrfToken(): string { return csrfToken; }
+export function isDesktop(): boolean { return desktop.available(); }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  if (csrfToken && ['POST','PUT','PATCH','DELETE'].includes((init.method ?? 'GET').toUpperCase())) headers.set('X-CSRF-Token', csrfToken);
-  const response = await fetch(path, { ...init, headers, credentials: 'include' });
+function apiUrl(path: string): string {
+  if (!desktop.available()) return path;
+  if (!path.startsWith('/')) throw new Error('Masaüstü API yolu geçersiz.');
+  return `${DESKTOP_API_BASE}${path}`;
+}
+
+function applyDesktopSession(session: DesktopSession): void {
+  if (!session.accessToken || !session.accessExpiresAt) throw new Error('Masaüstü oturum cevabı geçersiz.');
+  desktopAccessToken = session.accessToken;
+  desktopAccessExpiresAt = Date.parse(session.accessExpiresAt);
+  if (!Number.isFinite(desktopAccessExpiresAt)) throw new Error('Masaüstü oturum süresi geçersiz.');
+}
+
+function clearDesktopMemory(): void {
+  desktopAccessToken = '';
+  desktopAccessExpiresAt = 0;
+}
+
+async function parseJson<T>(response: Response): Promise<T> {
   const type = response.headers.get('content-type') ?? '';
   if (!type.includes('application/json')) {
     if (!response.ok) throw new Error(`İstek başarısız (${response.status}).`);
@@ -17,6 +48,132 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const body = await response.json() as ApiResponse<T>;
   if (!response.ok || !body.ok) throw new Error(body.ok ? `İstek başarısız (${response.status}).` : body.error.message);
   return body.data;
+}
+
+async function publicDesktopRequest<T>(path: string, payload?: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: payload === undefined ? 'GET' : 'POST',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+    credentials: 'omit',
+    cache: 'no-store'
+  });
+  return parseJson<T>(response);
+}
+
+export async function desktopLogin(email: string, password: string): Promise<DesktopSession> {
+  if (!desktop.available()) throw new Error('Masaüstü oturumu yalnız Windows uygulamasında kullanılabilir.');
+  const deviceId = await desktop.getOrCreateDeviceId();
+  const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/login', {
+    email,
+    password,
+    deviceId,
+    deviceName: navigator.userAgent.includes('Windows') ? 'WPAI Windows' : 'WPAI Desktop',
+    appVersion: '1.2.0'
+  });
+  await desktop.saveRefreshToken(session.refreshToken);
+  applyDesktopSession(session);
+  return session;
+}
+
+export async function restoreDesktopSession(): Promise<DesktopSession> {
+  if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const refreshToken = await desktop.loadRefreshToken();
+    if (!refreshToken) throw new Error('Kayıtlı masaüstü oturumu yok.');
+    const deviceId = await desktop.getOrCreateDeviceId();
+    try {
+      const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/refresh', { refreshToken, deviceId });
+      await desktop.saveRefreshToken(session.refreshToken);
+      applyDesktopSession(session);
+      return session;
+    } catch (error) {
+      clearDesktopMemory();
+      await desktop.removeRefreshToken().catch(() => undefined);
+      throw error;
+    }
+  })().finally(() => { refreshPromise = null; });
+  return refreshPromise;
+}
+
+export async function desktopLogout(): Promise<void> {
+  if (!desktop.available()) return;
+  const [refreshToken, deviceId] = await Promise.all([
+    desktop.loadRefreshToken().catch(() => null),
+    desktop.getOrCreateDeviceId()
+  ]);
+  if (refreshToken) {
+    await publicDesktopRequest('/api/auth/desktop/logout', { refreshToken, deviceId }).catch(() => undefined);
+  }
+  clearDesktopMemory();
+  await desktop.removeRefreshToken().catch(() => undefined);
+}
+
+async function desktopFetch(path: string, init: RequestInit, retry = true): Promise<Response> {
+  if (!desktopAccessToken || desktopAccessExpiresAt <= Date.now() + 30_000) await restoreDesktopSession();
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${desktopAccessToken}`);
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    headers,
+    credentials: 'omit',
+    cache: init.cache ?? 'no-store'
+  });
+  if (response.status === 401 && retry) {
+    clearDesktopMemory();
+    await restoreDesktopSession();
+    return desktopFetch(path, init, false);
+  }
+  return response;
+}
+
+async function webFetch(path: string, init: RequestInit): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((init.method ?? 'GET').toUpperCase())) {
+    headers.set('X-CSRF-Token', csrfToken);
+  }
+  return fetch(path, { ...init, headers, credentials: 'include' });
+}
+
+export async function publicApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = desktop.available()
+    ? await fetch(apiUrl(path), { ...init, credentials: 'omit', cache: init.cache ?? 'no-store' })
+    : await webFetch(path, init);
+  return parseJson<T>(response);
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = desktop.available() ? await desktopFetch(path, init) : await webFetch(path, init);
+  return parseJson<T>(response);
+}
+
+export async function apiBlob(path: string): Promise<Blob> {
+  const response = desktop.available()
+    ? await desktopFetch(path, { method: 'GET' })
+    : await webFetch(path, { method: 'GET' });
+  if (!response.ok) {
+    const type = response.headers.get('content-type') ?? '';
+    if (type.includes('application/json')) await parseJson(response);
+    throw new Error(`Dosya isteği başarısız (${response.status}).`);
+  }
+  return response.blob();
+}
+
+export async function downloadApiFile(path: string, fileName: string): Promise<void> {
+  const blob = await apiBlob(path);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function apiObjectUrl(path: string): Promise<string> {
+  return URL.createObjectURL(await apiBlob(path));
 }
 
 export function jsonBody(value: unknown): Pick<RequestInit, 'body'> { return { body: JSON.stringify(value) }; }
