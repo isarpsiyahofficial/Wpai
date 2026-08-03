@@ -1,0 +1,40 @@
+name: Patch Queue fixture placeholder
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.queue-fixture-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Correct exact SQL placeholder count
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('tests/worker/queues.test.ts')
+          text = path.read_text('utf-8')
+          old = "VALUES (?,?,'open',?,?,?,?,?,?,?)"
+          new = "VALUES (?,?,'open',?,?,?,?,?,?)"
+          if text.count(old) != 1:
+              raise SystemExit(f'Queue placeholder target count={text.count(old)}, expected=1')
+          path.write_text(text.replace(old, new), 'utf-8')
+      - name: Commit and remove one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .queue-fixture-trigger .github/workflows/patch-queue-fixture.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "test: correct Queue conversation fixture placeholders"
+          git push origin HEAD:agent/wpai-production-rebuild
