@@ -15,7 +15,7 @@
     "APP_ENV": "production",
     "DEFAULT_TIMEZONE": "Europe/Istanbul",
     "META_GRAPH_API_VERSION": "v23.0",
-    "DEFAULT_AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "DEFAULT_AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
     "DEFAULT_EMBEDDING_MODEL": "@cf/baai/bge-m3",
     "CLOUDFLARE_ACCOUNT_ID": "ad8e99c82c6c17d823f6877ff1efade4",
     "PROJECT_MANIFEST_VERSION": "2"
