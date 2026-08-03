@@ -21,18 +21,21 @@ def assert_file(path: str) -> None:
 
 def validate_files() -> None:
     required = [
-        "package.json", "package-lock.json", "wrangler.jsonc", "index.html",
-        ".github/workflows/ci.yml", ".github/workflows/windows-desktop.yml", ".github/workflows/deploy-production.yml",
+        "package.json", "package-lock.json", "wrangler.jsonc", "index.html", "rust-toolchain.toml",
+        ".github/workflows/ci.yml", ".github/workflows/windows-desktop.yml",
+        ".github/workflows/deploy-production.yml", ".github/workflows/e2e-live-scenarios.yml",
         "src/worker/index.ts", "src/worker/usageApi.ts", "src/frontend/main.tsx",
+        "src/frontend/styles.css", "src/frontend/neuron.css", "src/frontend/responsive.css",
         "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx",
         "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
         "src/frontend/pages/dashboardReports.tsx", "src/frontend/pages/index.ts",
         "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs",
-        "sidecar/faiss_service.py", "sidecar/requirements.txt",
+        "sidecar/faiss_service.py", "sidecar/requirements.txt", "sidecar/test_faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
         "migrations/0005_runtime_hardening.sql", "migrations/0006_ai_usage_and_summary_settings.sql",
         "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
-        "tests/worker/scoped-files.test.ts", "tests/worker/neuron-usage.test.ts", "tests/unit/ai-claims.test.ts"
+        "tests/worker/scoped-files.test.ts", "tests/worker/neuron-usage.test.ts", "tests/unit/ai-claims.test.ts",
+        "tests/e2e/playwright.config.mjs", "tests/e2e/responsive.spec.mjs", "tests/e2e/live-worker-smoke.mjs"
     ]
     for item in required:
         assert_file(item)
@@ -64,11 +67,12 @@ def validate_package_lock() -> None:
     workflows = "\n".join((ROOT / path).read_text("utf-8") for path in (
         ".github/workflows/ci.yml",
         ".github/workflows/windows-desktop.yml",
-        ".github/workflows/deploy-production.yml"
+        ".github/workflows/deploy-production.yml",
+        ".github/workflows/e2e-live-scenarios.yml"
     ))
     if "npm install --no-audit --no-fund" in workflows or "npm install --ignore-scripts" in workflows:
-        raise AssertionError("CI and deployment workflows must install JavaScript dependencies with npm ci")
-    if workflows.count("npm ci") < 4:
+        raise AssertionError("Primary CI and deployment installs must use npm ci")
+    if workflows.count("npm ci") < 7:
         raise AssertionError("Locked npm installs are missing from one or more workflows")
 
 
@@ -79,9 +83,63 @@ def validate_cargo_lock() -> None:
     for package in ("wpai-desktop", "tauri", "tauri-build", "keyring"):
         if f'name = "{package}"' not in cargo_lock:
             raise AssertionError(f"Cargo.lock package missing: {package}")
+
+    toolchain = (ROOT / "rust-toolchain.toml").read_text("utf-8")
+    if 'channel = "1.97.1"' not in toolchain or 'targets = ["x86_64-pc-windows-msvc"]' not in toolchain:
+        raise AssertionError("Rust toolchain and Windows target must be pinned")
+
     windows_workflow = (ROOT / ".github/workflows/windows-desktop.yml").read_text("utf-8")
-    if "cargo check --locked --manifest-path src-tauri/Cargo.toml" not in windows_workflow:
-        raise AssertionError("Windows workflow must verify Rust dependencies with cargo check --locked")
+    required_commands = (
+        "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+        "cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings",
+        "cargo check --locked --manifest-path src-tauri/Cargo.toml",
+        "npm run desktop:build",
+        "src-tauri/target/release/bundle/nsis"
+    )
+    for command in required_commands:
+        if command not in windows_workflow:
+            raise AssertionError(f"Windows deterministic test/build command missing: {command}")
+
+
+def validate_e2e_gates() -> None:
+    workflow = (ROOT / ".github/workflows/e2e-live-scenarios.yml").read_text("utf-8")
+    for required in (
+        "Responsive browser, overlap and workflow checks",
+        "Local Wrangler production-like HTTP, D1, R2 and webhook flow",
+        "Alternative Node 24 full code path",
+        "@playwright/test@1.55.0",
+        "npx playwright test --config=tests/e2e/playwright.config.mjs",
+        "wrangler d1 migrations apply wa-ai-prod --local",
+        "node tests/e2e/live-worker-smoke.mjs",
+        "node-version: 24"
+    ):
+        if required not in workflow:
+            raise AssertionError(f"Live-like or responsive CI gate missing: {required}")
+
+    browser = (ROOT / "tests/e2e/responsive.spec.mjs").read_text("utf-8")
+    for required in (
+        "phone-320x568", "phone-390x844", "tablet-768x1024",
+        "laptop-1366x768", "desktop-1920x1080",
+        "document horizontal overflow", "clipped text", "overlapping sibling elements",
+        "critical administrator workflows", "setup and login screens", "API failure"
+    ):
+        if required not in browser:
+            raise AssertionError(f"Responsive browser coverage missing: {required}")
+
+    smoke = (ROOT / "tests/e2e/live-worker-smoke.mjs").read_text("utf-8")
+    for required in (
+        "health-and-security-headers", "auth-and-csrf", "contacts-and-csv",
+        "meta-verification-and-signed-webhook", "webhook-idempotency",
+        "manual-message-idempotency", "r2-scoped-file-roundtrip",
+        "neuron-safety-limit", "reports-and-export", "api-not-found"
+    ):
+        if required not in smoke:
+            raise AssertionError(f"Live Wrangler smoke coverage missing: {required}")
+
+    main = (ROOT / "src/frontend/main.tsx").read_text("utf-8")
+    imports = [main.find("./styles.css"), main.find("./neuron.css"), main.find("./responsive.css")]
+    if min(imports) < 0 or imports != sorted(imports):
+        raise AssertionError("Responsive hardening must load after base and Neuron styles")
 
 
 def validate_wrangler() -> None:
@@ -153,6 +211,12 @@ def validate_product_scope() -> None:
     if "export { DashboardPage, ReportsPage } from './dashboardReports';" not in pages_index:
         raise AssertionError("Dashboard and reports must use the transparent Neuron views")
 
+    whatsapp = (ROOT / "src/frontend/pages/whatsapp.tsx").read_text("utf-8")
+    if "`/api/attachments/${" in whatsapp or 'href={`/api/attachments/' in whatsapp:
+        raise AssertionError("Chat attachments must never use the unscoped legacy route")
+    if "/api/conversations/${detail.conversation.id}/attachments/${String(message.attachment_id)}" not in whatsapp:
+        raise AssertionError("Chat attachments must use the conversation-scoped route")
+
     ai_page = (ROOT / "src/frontend/pages/aiPage.tsx").read_text("utf-8")
     for label in (
         "Bugün kullanılan", "Resmî günlük tahsis", "Resmî tahsise kalan",
@@ -187,7 +251,8 @@ if __name__ == "__main__":
     validate_files()
     validate_package_lock()
     validate_cargo_lock()
+    validate_e2e_gates()
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: locked npm/Rust dependencies, files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
+    print("Static validation passed: locked npm/Rust dependencies, live-like HTTP, responsive browser gates, scoped files, Cloudflare manifest, D1 schema, safe defaults and Neuron fields are consistent.")
