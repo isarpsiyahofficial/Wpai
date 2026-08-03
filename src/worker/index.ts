@@ -4,6 +4,7 @@ import { apiRoutes } from './api';
 import { extendedApiRoutes } from './extendedApi';
 import { scopedFileRoutes } from './scopedFiles';
 import { usageApiRoutes } from './usageApi';
+import { trainingApiRoutes } from './trainingApi';
 import { webhookRoutes } from './webhook';
 import { handleQueue } from './queues';
 import { first, nowIso, run, setting, all } from './db';
@@ -59,6 +60,7 @@ app.route('/api', apiRoutes);
 app.route('/api', extendedApiRoutes);
 app.route('/api', scopedFileRoutes);
 app.route('/api', usageApiRoutes);
+app.route('/api', trainingApiRoutes);
 app.route('/webhooks', webhookRoutes);
 
 app.notFound(async c => {
@@ -81,13 +83,13 @@ export async function runScheduled(env: Env): Promise<void> {
     if (!existing) await run(env.DB, `INSERT INTO admin_notifications (id,type,priority,status,contact_id,conversation_id,title,body,deduplication_key,created_at,updated_at) VALUES (?, 'follow_up', 'normal', 'unread', ?, ?, 'Takip görevi geldi', ?, ?, ?, ?)`, crypto.randomUUID(), task.contact_id, task.conversation_id, task.title.slice(0,1000), key, now, now);
   }
 
-  const pendingKnowledge = await all<{ id: string; status: string; vector_status: string; vector_version: number }>(env.DB,
-    `SELECT id,status,vector_status,vector_version FROM business_knowledge
+  const pendingKnowledge = await all<{ id: string; status: string; vector_status: string }>(env.DB,
+    `SELECT id,status,vector_status FROM business_knowledge
       WHERE deleted_at IS NULL AND ((status='approved' AND vector_status IN ('pending','failed')) OR status<>'approved')
       ORDER BY updated_at LIMIT 100`);
   for (const item of pendingKnowledge) {
     if (item.status === 'approved') {
-      await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'upsert', version: item.vector_version > 0 ? item.vector_version : null });
+      await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'upsert' });
     } else {
       const hasChunks = await first<{ count: number }>(env.DB, 'SELECT COUNT(*) AS count FROM knowledge_chunks WHERE knowledge_id=?', item.id);
       if ((hasChunks?.count ?? 0) > 0) await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'delete' });
