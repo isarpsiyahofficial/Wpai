@@ -1,7 +1,9 @@
-import type { Env } from '../../src/worker/types';
-
-declare module 'cloudflare:workers' {
-  interface ProvidedEnv extends Env {
-    TEST_MIGRATIONS: D1Migration[];
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      TEST_MIGRATIONS: D1Migration[];
+    }
   }
 }
+
+export {};
