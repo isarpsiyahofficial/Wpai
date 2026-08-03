@@ -5,10 +5,12 @@ import { extendedApiRoutes } from './extendedApi';
 import { scopedFileRoutes } from './scopedFiles';
 import { usageApiRoutes } from './usageApi';
 import { trainingApiRoutes } from './trainingApi';
+import { operationsApiRoutes } from './operationsApi';
 import { webhookRoutes } from './webhook';
 import { handleQueue } from './queues';
+import { consumeDeadLetterBatch } from './deadLetter';
 import { first, nowIso, run, setting, all } from './db';
-import type { AppContext, Env, KnowledgeSyncJob } from './types';
+import type { AppContext, DeadLetterJob, Env, KnowledgeSyncJob } from './types';
 import { consumeKnowledgeSync, enqueueKnowledgeSync, vectorStatus } from './vectorSync';
 
 const app = new Hono<AppContext>();
@@ -31,8 +33,10 @@ app.get('/health', async c => {
     ? await c.env.FILES.list({ limit: 1 }).then(() => true).catch(() => false)
     : null;
   const vector = d1 ? await vectorStatus(c.env).catch(() => null) : null;
+  const probeVector = new Array<number>(1024).fill(0);
+  probeVector[0] = 1;
   const vectorizeOperational = deep
-    ? await c.env.KNOWLEDGE_INDEX.query(new Array<number>(1024).fill(0), { topK: 1, returnMetadata: 'none' }).then(() => true).catch(() => false)
+    ? await c.env.KNOWLEDGE_INDEX.query(probeVector, { topK: 1, returnMetadata: 'none' }).then(() => true).catch(() => false)
     : null;
   const ok = d1 && (!deep || (r2Operational === true && vectorizeOperational === true));
   return c.json({
@@ -61,6 +65,7 @@ app.route('/api', extendedApiRoutes);
 app.route('/api', scopedFileRoutes);
 app.route('/api', usageApiRoutes);
 app.route('/api', trainingApiRoutes);
+app.route('/api', operationsApiRoutes);
 app.route('/webhooks', webhookRoutes);
 
 app.notFound(async c => {
@@ -104,6 +109,9 @@ export default {
   fetch: app.fetch,
   queue(batch: MessageBatch<unknown>, env: Env) {
     if (batch.queue === 'wa-knowledge-index') return consumeKnowledgeSync(batch as MessageBatch<KnowledgeSyncJob>, env);
+    if (batch.queue === 'wa-ai-dlq' || batch.queue === 'wa-outbound-dlq') {
+      return consumeDeadLetterBatch(batch as MessageBatch<DeadLetterJob>, env);
+    }
     return handleQueue(batch, env);
   },
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) { ctx.waitUntil(runScheduled(env)); }
