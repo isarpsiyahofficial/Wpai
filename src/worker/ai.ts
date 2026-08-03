@@ -300,7 +300,7 @@ export function extractMonetaryClaims(text: string): MonetaryClaim[] {
     const rawCurrency = match[1] ?? match[4];
     if (!rawNumber || !rawCurrency) continue;
     const amount = parseLocalizedAmount(rawNumber);
-    if (Number.isFinite(amount) && amount >= 0) claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0] });
+    if (Number.isFinite(amount) && amount >= 0) claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0].trim().replace(/[.,]+$/, '') });
   }
   return claims;
 }
