@@ -199,7 +199,7 @@ operationsApiRoutes.post('/conversations/:id/notes', zValidator('json', NoteSche
   await run(c.env.DB,
     `INSERT INTO customer_notes
       (id,contact_id,conversation_id,source,note_text,created_by_admin_id,created_at,updated_at)
-     VALUES (?,?,?,'admin',?,?,?,?,?)`,
+     VALUES (?,?,?,'admin',?,?,?,?)`,
     id, conversation.contact_id, conversationId, c.req.valid('json').text, c.get('adminId')!, now, now);
   await audit(c.env.DB, c.get('adminId')!, 'customer_note.created', 'customer_note', id,
     { conversationId }, c.get('requestId'));
@@ -282,7 +282,7 @@ operationsApiRoutes.post('/contacts/import-file', async c => {
   if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') return fail(c, 'CSV_REQUIRED', 'Yalnız CSV kabul edilir.', 422);
   if (file.size <= 0 || file.size > 5_000_000) return fail(c, 'CSV_SIZE_INVALID', 'CSV en fazla 5 MB olabilir.', 422);
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/^\uFEFF/, '');
+  const text = new TextDecoder('utf-8', { fatal: false, ignoreBOM: false }).decode(bytes).replace(/^\uFEFF/, '');
   const rows = parseCsv(text);
   if (rows.length < 2) return fail(c, 'CSV_EMPTY', 'CSV veri satırı içermiyor.', 422);
   const headers = rows[0]!.map(normalizeHeader);
