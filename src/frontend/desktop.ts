@@ -1,17 +1,82 @@
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+import { invoke } from '@tauri-apps/api/core';
 
-function hasTauri(): boolean { return '__TAURI_INTERNALS__' in window; }
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!hasTauri()) throw new Error('DESKTOP_ONLY');
-  const module = await import('@tauri-apps/api/core');
-  return module.invoke<T>(command, args);
+export type DesktopPreferences = {
+  closeToTray: boolean;
+  autostartEnabled: boolean;
+  notificationsEnabled: boolean;
+  notificationRedact: boolean;
+};
+
+export type LocalIndexVector = {
+  id: string;
+  vector: number[];
+  metadata: Record<string, unknown>;
+};
+
+export type FaissMatch = {
+  id: string;
+  score: number;
+  metadata: Record<string, unknown>;
+};
+
+function available(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+async function requiredInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!available()) throw new Error('Bu işlem yalnız WPAI Windows uygulamasında kullanılabilir.');
+  return invoke<T>(command, args);
 }
 
 export const desktop = {
-  available: hasTauri,
-  async saveCloudflareToken(token: string): Promise<void> { await invoke('save_cloudflare_token', { token }); },
-  async loadCloudflareToken(): Promise<string | null> { return invoke<string | null>('load_cloudflare_token'); },
-  async removeCloudflareToken(): Promise<void> { await invoke('remove_cloudflare_token'); },
-  async faissUpsert(id: string, vector: number[], metadata: Record<string, unknown>): Promise<void> { await invoke('faiss_upsert', { id, vector, metadata }); },
-  async faissSearch(vector: number[], topK = 6): Promise<Array<{ id: string; score: number; metadata: Record<string, unknown> }>> { return invoke('faiss_search', { vector, topK }); }
+  available,
+  async getOrCreateDeviceId(): Promise<string> {
+    const seed = `wpai-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    return requiredInvoke<string>('get_or_create_device_id', { seed });
+  },
+  saveRefreshToken(token: string): Promise<void> {
+    return requiredInvoke<void>('save_desktop_refresh_token', { token });
+  },
+  loadRefreshToken(): Promise<string | null> {
+    return requiredInvoke<string | null>('load_desktop_refresh_token');
+  },
+  removeRefreshToken(): Promise<void> {
+    return requiredInvoke<void>('remove_desktop_refresh_token');
+  },
+  preferences(): Promise<DesktopPreferences> {
+    return requiredInvoke<DesktopPreferences>('desktop_preferences');
+  },
+  setPreferences(preferences: DesktopPreferences): Promise<DesktopPreferences> {
+    return requiredInvoke<DesktopPreferences>('set_desktop_preferences', { preferences });
+  },
+  setAutostart(enabled: boolean): Promise<DesktopPreferences> {
+    return requiredInvoke<DesktopPreferences>('set_windows_autostart', { enabled });
+  },
+  showMainWindow(): Promise<void> {
+    return requiredInvoke<void>('show_main_window');
+  },
+  quit(): Promise<void> {
+    return requiredInvoke<void>('quit_application');
+  },
+  faissHealth(): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_health');
+  },
+  faissStatus(): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_status');
+  },
+  faissReplace(sourceChecksum: string, vectors: LocalIndexVector[]): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_replace', { sourceChecksum, vectors });
+  },
+  faissUpsert(id: string, vector: number[], metadata: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_upsert', { id, vector, metadata });
+  },
+  faissDelete(ids: string[]): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_delete', { ids });
+  },
+  faissSearch(vector: number[], topK = 6, threshold = 0.62): Promise<FaissMatch[]> {
+    return requiredInvoke<FaissMatch[]>('faiss_search', { vector, topK, threshold });
+  },
+  faissClear(): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('faiss_clear');
+  }
 };
