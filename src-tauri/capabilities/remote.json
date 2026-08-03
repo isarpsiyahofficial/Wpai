@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "wpai-remote-production",
+  "description": "Allows only the production WPAI Worker and local development UI to call the minimal desktop commands.",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://wa-ai-panel.wa-ai-panel.workers.dev/*",
+      "http://localhost:5173/*"
+    ]
+  },
+  "platforms": ["windows"],
+  "permissions": ["core:default", "allow-wpai-commands"]
+}
