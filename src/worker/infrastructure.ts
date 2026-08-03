@@ -70,7 +70,15 @@ export async function scanInfrastructure(accountId: string, token: string): Prom
   components.push(component('worker', 'Worker uygulaması', Boolean(worker), worker?.id ?? worker?.name, manifest.worker, false, worker ? undefined : 'Worker deploy işlemi test edilmiş imzalı kaynak sürümünü gerektirir.'));
   const vector = indexes.find(index => index.name === manifest.vectorize);
   const vectorCorrect = Boolean(vector && vector.config?.dimensions === manifest.vectorDimensions && (vector.config.metric ?? manifest.vectorMetric) === manifest.vectorMetric);
-  components.push({ key: 'vectorize', label: 'Vectorize bilgi indeksi', status: !vector ? 'missing' : vectorCorrect ? 'ready' : 'misconfigured', current: vector ? `${vector.name} / ${vector.config?.dimensions ?? '?'} / ${vector.config?.metric ?? '?'}` : undefined, expected: `${manifest.vectorize} / ${manifest.vectorDimensions} / ${manifest.vectorMetric}`, repairable: !vector, details: vector && !vectorCorrect ? 'Yanlış boyutlu indeks silinmez veya üzerine yazılmaz; manuel inceleme gerekir.' : undefined });
+  components.push({
+    key: 'vectorize',
+    label: 'Vectorize bilgi indeksi',
+    status: !vector ? 'missing' : vectorCorrect ? 'ready' : 'misconfigured',
+    ...(vector ? { current: `${vector.name} / ${vector.config?.dimensions ?? '?'} / ${vector.config?.metric ?? '?'}` } : {}),
+    expected: `${manifest.vectorize} / ${manifest.vectorDimensions} / ${manifest.vectorMetric}`,
+    repairable: !vector,
+    ...(vector && !vectorCorrect ? { details: 'Yanlış boyutlu indeks silinmez veya üzerine yazılmaz; manuel inceleme gerekir.' } : {})
+  });
   components.push({ key: 'safety', label: 'Onarım güvenlik sınırı', status: 'ready', current: 'Silme, DNS ve ücretli plan işlemleri kapalı', expected: 'Yalnız WPAI kaynakları', repairable: false });
 
   const blocked = components.some(item => item.status === 'blocked');
