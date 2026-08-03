@@ -14,6 +14,7 @@ export interface Env {
   INBOUND_AI: Queue<InboundAiJob>;
   OUTBOUND: Queue<OutboundJob>;
   ADMIN_NOTIFY: Queue<AdminNotifyJob>;
+  KNOWLEDGE_SYNC: Queue<KnowledgeSyncJob>;
   AI_DLQ: Queue<DeadLetterJob>;
   OUTBOUND_DLQ: Queue<DeadLetterJob>;
   AI: Ai;
@@ -54,6 +55,16 @@ export type AdminNotifyJob = {
   jobId: string;
   notificationId: string;
   conversationId?: string;
+  enqueuedAt: string;
+};
+
+export type KnowledgeSyncJob = {
+  jobId: string;
+  knowledgeId: string | null;
+  operation: 'upsert' | 'delete' | 'rebuild' | 'clear';
+  target: 'cloud' | 'local' | 'both';
+  expectedVersion: number | null;
+  checksum: string | null;
   enqueuedAt: string;
 };
 
