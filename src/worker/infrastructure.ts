@@ -8,12 +8,12 @@ const manifest = {
   r2: 'wa-ai-files-prod',
   existingQueues: ['wa-inbound-ai', 'wa-outbound', 'wa-admin-notify', 'wa-ai-dlq', 'wa-outbound-dlq'],
   knowledgeQueue: 'wa-knowledge-index',
+  queues: ['wa-inbound-ai', 'wa-outbound', 'wa-admin-notify', 'wa-ai-dlq', 'wa-outbound-dlq', 'wa-knowledge-index'],
   vectorize: 'wa-ai-knowledge-prod',
   vectorDimensions: 1024,
   vectorMetric: 'cosine'
 } as const;
 
-const allQueues = [...manifest.existingQueues, manifest.knowledgeQueue] as const;
 type CfEnvelope<T> = { success: boolean; errors?: Array<{ code?: number; message?: string }>; result: T };
 type QueueRecord = { queue_id?: string; queue_name?: string; id?: string; name?: string };
 
@@ -74,7 +74,7 @@ export async function scanInfrastructure(accountId: string, token: string): Prom
   components.push(component('r2', 'R2 özel dosya alanı', Boolean(bucket), bucket?.name, manifest.r2, false,
     bucket ? undefined : 'Mevcut production R2 otomatik yeniden oluşturulmaz.'));
 
-  for (const name of allQueues) {
+  for (const name of manifest.queues) {
     const queue = queues.find(item => item.name === name);
     const isAllowedNewQueue = name === manifest.knowledgeQueue;
     components.push(component(
