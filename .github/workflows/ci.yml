@@ -23,11 +23,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install JavaScript dependencies
-        run: npm install --no-audit --no-fund
+      - name: Install locked JavaScript dependencies
+        run: npm ci --no-audit --no-fund
       - name: Secret scan
         run: npm run security:scan
       - name: Validate manifest, migrations and product scope
@@ -74,5 +75,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --ignore-scripts --no-audit --no-fund
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm audit --audit-level=high
