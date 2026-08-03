@@ -1,6 +1,6 @@
 import { AiDecisionSchema, type AiDecision } from '../shared/contracts';
 import type { Env, InboundAiJob } from './types';
-import { all, first, nowIso, run, setting } from './db';
+import { all, first, nowIso, run, setting, setSetting } from './db';
 
 export type AiContext = {
   conversationId: string;
@@ -15,18 +15,49 @@ export type AiContext = {
   contextVersion: number;
 };
 
-type EmbeddingResult = { data?: number[][]; shape?: number[] } | number[][];
+type EmbeddingResult = { data?: number[][]; shape?: number[]; usage?: AiUsage } | number[][];
+type AiUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; input_tokens?: number; output_tokens?: number };
+type TextGenerationResult = { response?: string; usage?: AiUsage };
+type MonetaryClaim = { amount: number; currency: string; raw: string };
+
+type CriticalClaimValidation = { valid: true } | { valid: false; reason: 'unapproved_price_claim'; claims: MonetaryClaim[] };
 
 function extractVector(result: EmbeddingResult): number[] {
   if (Array.isArray(result)) return result[0] ?? [];
   return result.data?.[0] ?? [];
 }
 
-export async function embed(env: Env, text: string): Promise<number[]> {
-  const result = await env.AI.run(env.DEFAULT_EMBEDDING_MODEL as keyof AiModels, { text: [text] }) as unknown as EmbeddingResult;
-  const vector = extractVector(result);
-  if (!vector.length) throw new Error('EMBEDDING_EMPTY');
-  return vector;
+export async function embed(env: Env, text: string, conversationId?: string): Promise<number[]> {
+  const started = Date.now();
+  try {
+    const result = await env.AI.run(env.DEFAULT_EMBEDDING_MODEL as keyof AiModels, { text: [text] }) as unknown as EmbeddingResult;
+    const vector = extractVector(result);
+    if (!vector.length) throw new Error('EMBEDDING_EMPTY');
+    const usage = Array.isArray(result) ? undefined : result.usage;
+    const inputTokens = usage?.input_tokens ?? usage?.prompt_tokens ?? Math.ceil(text.length / 4);
+    await recordAiUsage(env, {
+      model: env.DEFAULT_EMBEDDING_MODEL,
+      operationType: 'embedding',
+      inputTokens,
+      outputTokens: 0,
+      conversationId,
+      success: true,
+      durationMs: Date.now() - started
+    });
+    return vector;
+  } catch (error) {
+    await recordAiUsage(env, {
+      model: env.DEFAULT_EMBEDDING_MODEL,
+      operationType: 'embedding',
+      inputTokens: Math.ceil(text.length / 4),
+      outputTokens: 0,
+      conversationId,
+      success: false,
+      errorCode: safeErrorCode(error),
+      durationMs: Date.now() - started
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function indexKnowledge(env: Env, knowledgeId: string): Promise<void> {
@@ -74,9 +105,9 @@ export function chunkText(text: string, maxChars: number, overlap: number): stri
   return chunks.filter(Boolean);
 }
 
-async function relevantKnowledge(env: Env, query: string): Promise<Array<{ id: string; title: string; content: string }>> {
+async function relevantKnowledge(env: Env, query: string, conversationId: string): Promise<Array<{ id: string; title: string; content: string }>> {
   try {
-    const vector = await embed(env, query);
+    const vector = await embed(env, query, conversationId);
     const matches = await env.KNOWLEDGE_INDEX.query(vector, { topK: 6, returnMetadata: 'all' });
     const ids = [...new Set(matches.matches.map(match => String(match.metadata?.knowledgeId ?? '')).filter(Boolean))];
     if (!ids.length) return [];
@@ -117,7 +148,7 @@ export async function buildAiContext(env: Env, conversationId: string, contactId
     summary: summary?.summary_text ?? '',
     requirements,
     recentMessages: recent.reverse().map(message => ({ id: message.id, direction: message.direction, senderType: message.sender_type, text: message.text_content ?? '', createdAt: message.created_at })),
-    approvedKnowledge: await relevantKnowledge(env, finalMessage),
+    approvedKnowledge: await relevantKnowledge(env, finalMessage, conversationId),
     businessInstructions: await setting(env.DB, 'ai_business_instructions') ?? '',
     handoffRules,
     contextVersion: conversation.current_context_version
@@ -132,16 +163,67 @@ export async function decide(env: Env, context: AiContext, latestMessage: string
     APPROVED_BUSINESS_KNOWLEDGE: context.approvedKnowledge,
     LATEST_MESSAGE: latestMessage
   });
-  const result = await env.AI.run(env.DEFAULT_AI_MODEL as keyof AiModels, {
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    temperature: 0.2,
-    max_tokens: 900,
-    response_format: { type: 'json_object' }
-  }) as unknown as { response?: string };
-  const raw = result.response ?? '';
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { throw new Error('AI_JSON_INVALID'); }
-  return AiDecisionSchema.parse(parsed);
+  const started = Date.now();
+  let raw = '';
+  try {
+    const result = await env.AI.run(env.DEFAULT_AI_MODEL as keyof AiModels, {
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: 0.2,
+      max_tokens: 900,
+      response_format: { type: 'json_object' }
+    }) as unknown as TextGenerationResult;
+    raw = result.response ?? '';
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { throw new Error('AI_JSON_INVALID'); }
+    const decision = AiDecisionSchema.parse(parsed);
+    const inputTokens = result.usage?.prompt_tokens ?? result.usage?.input_tokens ?? Math.ceil((system.length + user.length) / 4);
+    const outputTokens = result.usage?.completion_tokens ?? result.usage?.output_tokens ?? Math.ceil(raw.length / 4);
+    await recordAiUsage(env, {
+      model: env.DEFAULT_AI_MODEL,
+      operationType: 'customer_decision',
+      inputTokens,
+      outputTokens,
+      conversationId: context.conversationId,
+      success: true,
+      durationMs: Date.now() - started
+    });
+    return decision;
+  } catch (error) {
+    await recordAiUsage(env, {
+      model: env.DEFAULT_AI_MODEL,
+      operationType: 'customer_decision',
+      inputTokens: Math.ceil((system.length + user.length) / 4),
+      outputTokens: Math.ceil(raw.length / 4),
+      conversationId: context.conversationId,
+      success: false,
+      errorCode: safeErrorCode(error),
+      durationMs: Date.now() - started
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function validateCriticalClaims(env: Env, conversationId: string, contactId: string, reply: string): Promise<CriticalClaimValidation> {
+  const claims = extractMonetaryClaims(reply);
+  if (!claims.length) return { valid: true };
+  const rules = await all<{ amount_min: number | null; amount_max: number | null; currency_code: string }>(env.DB,
+    "SELECT amount_min, amount_max, currency_code FROM pricing_rules WHERE status='approved'");
+  const requirements = await first<{ quoted_price: number | null; discount_amount: number | null; budget_min: number | null; budget_max: number | null; currency_code: string | null }>(env.DB,
+    'SELECT quoted_price,discount_amount,budget_min,budget_max,currency_code FROM customer_requirements WHERE conversation_id=? AND contact_id=?', conversationId, contactId);
+  const unknown = claims.filter(claim => {
+    const currency = normalizeCurrency(claim.currency);
+    const allowedByRule = rules.some(rule => {
+      if (normalizeCurrency(rule.currency_code) !== currency) return false;
+      if (rule.amount_min != null && rule.amount_max != null) return claim.amount >= rule.amount_min && claim.amount <= rule.amount_max;
+      return [rule.amount_min, rule.amount_max].some(value => value != null && nearlyEqual(claim.amount, value));
+    });
+    if (allowedByRule) return false;
+    const customerCurrency = normalizeCurrency(requirements?.currency_code ?? 'TRY');
+    if (customerCurrency !== currency) return true;
+    return ![requirements?.quoted_price, requirements?.discount_amount, requirements?.budget_min, requirements?.budget_max]
+      .some(value => value != null && nearlyEqual(claim.amount, value));
+  });
+  return unknown.length ? { valid: false, reason: 'unapproved_price_claim', claims: unknown } : { valid: true };
 }
 
 export async function finalSendGate(env: Env, job: InboundAiJob, decision: AiDecision): Promise<{ allowed: boolean; reason?: string }> {
@@ -159,5 +241,94 @@ export async function finalSendGate(env: Env, job: InboundAiJob, decision: AiDec
   if (state.ai_paused_until && state.ai_paused_until > nowIso()) return { allowed: false, reason: 'paused' };
   if (state.last_message_id !== job.expectedLastMessageId) return { allowed: false, reason: 'stale_message' };
   if (decision.action !== 'reply' || decision.needs_human) return { allowed: false, reason: 'decision_requires_human' };
+  const critical = await validateCriticalClaims(env, job.conversationId, job.contactId, decision.reply);
+  if (!critical.valid) return { allowed: false, reason: critical.reason };
   return { allowed: true };
 }
+
+async function recordAiUsage(env: Env, input: {
+  model: string; operationType: string; inputTokens: number; outputTokens: number;
+  conversationId?: string; success: boolean; errorCode?: string; durationMs: number;
+}): Promise<void> {
+  const estimatedNeurons = estimateNeurons(input.model, input.inputTokens, input.outputTokens);
+  await run(env.DB,
+    `INSERT INTO ai_usage_records (id,model,operation_type,input_tokens,output_tokens,estimated_neurons,conversation_id,success,error_code,created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    crypto.randomUUID(), input.model, input.operationType, input.inputTokens, input.outputTokens,
+    estimatedNeurons, input.conversationId ?? null, input.success ? 1 : 0, input.errorCode ?? null, nowIso());
+  await maybeWarnQuota(env);
+}
+
+export function estimateNeurons(model: string, inputTokens: number, outputTokens: number): number {
+  if (model.includes('bge-m3')) return inputTokens * 1075 / 1_000_000;
+  if (model.includes('llama-3.1-8b-instruct-fast') || model.includes('llama-3.1-8b-instruct-fp8-fast')) {
+    return inputTokens * 4119 / 1_000_000 + outputTokens * 34868 / 1_000_000;
+  }
+  return 0;
+}
+
+async function maybeWarnQuota(env: Env): Promise<void> {
+  const total = await first<{ neurons: number }>(env.DB,
+    "SELECT COALESCE(SUM(estimated_neurons),0) AS neurons FROM ai_usage_records WHERE created_at >= date('now')");
+  const limit = Number(await setting(env.DB, 'ai_daily_neuron_limit') ?? '10000');
+  if (!Number.isFinite(limit) || limit <= 0) return;
+  const ratio = (total?.neurons ?? 0) / limit;
+  const threshold = ratio >= 1 ? 100 : ratio >= .9 ? 90 : ratio >= .7 ? 70 : 0;
+  if (!threshold) return;
+  const date = nowIso().slice(0, 10);
+  const dedupe = `ai-quota:${date}:${threshold}`;
+  const exists = await first<{ id: string }>(env.DB, 'SELECT id FROM admin_notifications WHERE deduplication_key=? LIMIT 1', dedupe);
+  if (!exists) {
+    const now = nowIso();
+    await run(env.DB,
+      `INSERT INTO admin_notifications (id,type,priority,status,title,body,deduplication_key,created_at,updated_at)
+       VALUES (?,'ai_quota',?,'unread','AI kullanım uyarısı',?,?,?,?)`,
+      crypto.randomUUID(), threshold >= 100 ? 'critical' : threshold >= 90 ? 'high' : 'normal',
+      `Günlük tahmini Workers AI kullanımı %${threshold} eşiğine ulaştı.`, dedupe, now, now);
+  }
+  if (threshold >= 100) {
+    await setSetting(env.DB, 'ai_global_mode', 'suggestion');
+    await setSetting(env.DB, 'ai_auto_reply_enabled', false);
+  }
+}
+
+export function extractMonetaryClaims(text: string): MonetaryClaim[] {
+  const pattern = /(?:\b(TL|TRY|USD|EUR|AED)\b|[₺$€])\s*([0-9][0-9\s.,]*)|([0-9][0-9\s.,]*)\s*(?:\b(TL|TRY|USD|EUR|AED)\b|([₺$€]))/giu;
+  const claims: MonetaryClaim[] = [];
+  for (const match of text.matchAll(pattern)) {
+    const rawNumber = match[2] ?? match[3];
+    const rawCurrency = match[1] ?? match[4] ?? match[5];
+    if (!rawNumber || !rawCurrency) continue;
+    const amount = parseLocalizedAmount(rawNumber);
+    if (Number.isFinite(amount) && amount >= 0) claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0] });
+  }
+  return claims;
+}
+
+function parseLocalizedAmount(value: string): number {
+  let normalized = value.replace(/\s/g, '');
+  const comma = normalized.lastIndexOf(',');
+  const dot = normalized.lastIndexOf('.');
+  if (comma >= 0 && dot >= 0) {
+    if (comma > dot) normalized = normalized.replace(/\./g, '').replace(',', '.');
+    else normalized = normalized.replace(/,/g, '');
+  } else if (comma >= 0) {
+    const digitsAfter = normalized.length - comma - 1;
+    normalized = digitsAfter === 3 ? normalized.replace(/,/g, '') : normalized.replace(',', '.');
+  } else if (dot >= 0) {
+    const digitsAfter = normalized.length - dot - 1;
+    if (digitsAfter === 3) normalized = normalized.replace(/\./g, '');
+  }
+  return Number(normalized);
+}
+
+function normalizeCurrency(value: string): string {
+  const upper = value.toUpperCase();
+  if (upper === '₺' || upper === 'TL') return 'TRY';
+  if (upper === '$') return 'USD';
+  if (upper === '€') return 'EUR';
+  return upper;
+}
+
+function nearlyEqual(left: number, right: number): boolean { return Math.abs(left - right) < 0.01; }
+function safeErrorCode(error: unknown): string { return (error instanceof Error ? error.message : 'UNKNOWN_AI_ERROR').slice(0, 160); }
