@@ -12,8 +12,8 @@ describe('health, security headers and routing',()=>{
     const response=await request('/api/dashboard');expect(response.status).toBe(401);expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');expect(response.headers.get('X-Frame-Options')).toBe('DENY');expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');expect(response.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");const text=await response.text();expect(text).not.toContain('node_modules');expect(text).not.toContain(' at ');
   });
 
-  it('sends unknown non-API paths to the asset binding and returns JSON for unknown API paths',async()=>{
+  it('sends unknown non-API paths to assets and protects unknown API paths before revealing route details',async()=>{
     const page=await request('/unknown-page');expect(page.status).toBe(404);expect(page.headers.get('Content-Type')).toBeNull();
-    const api=await request('/api/does-not-exist');expect(api.status).toBe(404);expect(api.headers.get('Content-Type')).toContain('application/json');expect(await api.json<any>()).toMatchObject({ok:false,error:{code:'NOT_FOUND'}});
+    const api=await request('/api/does-not-exist');expect(api.status).toBe(401);expect(api.headers.get('Content-Type')).toContain('application/json');expect(await api.json<any>()).toMatchObject({ok:false,error:{code:'AUTH_REQUIRED'}});
   });
 });
