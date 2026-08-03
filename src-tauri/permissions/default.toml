@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "allow-wpai-commands"
+description = "Allows the WPAI window to use Windows Credential Manager and the local FAISS sidecar."
+commands.allow = [
+  "save_cloudflare_token",
+  "load_cloudflare_token",
+  "remove_cloudflare_token",
+  "faiss_health",
+  "faiss_upsert",
+  "faiss_search"
+]
