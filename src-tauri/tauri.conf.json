@@ -14,20 +14,21 @@
       {
         "label": "main",
         "title": "WPAI - WhatsApp ve AI Yönetimi",
-        "url": "https://wa-ai-panel.wa-ai-panel.workers.dev/",
         "width": 1440,
-        "height": 900,
-        "minWidth": 1024,
-        "minHeight": 680,
+        "height": 920,
+        "minWidth": 1100,
+        "minHeight": 720,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "visible": true
       }
     ],
     "security": {
-      "capabilities": ["wpai-remote-production"],
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://wa-ai-panel.wa-ai-panel.workers.dev https://graph.facebook.com https://api.cloudflare.com; frame-ancestors 'none'; base-uri 'self'"
-    }
+      "capabilities": ["wpai-local"],
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://wa-ai-panel.wa-ai-panel.workers.dev; font-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    },
+    "withGlobalTauri": false
   },
   "bundle": {
     "active": true,
