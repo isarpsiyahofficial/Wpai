@@ -1,0 +1,293 @@
+name: Apply completion patch
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.completion-patch-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Apply verified product patches
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(file: str, old: str, new: str) -> None:
+              path = Path(file)
+              text = path.read_text('utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{file}: replacement target count={count}, expected=1')
+              path.write_text(text.replace(old, new), 'utf-8')
+
+          # Exact optional typing without weakening strict mode.
+          replace_once(
+              'src/worker/ai.ts',
+              "conversationId?: string; success: boolean; errorCode?: string; durationMs: number;",
+              "conversationId?: string | undefined; success: boolean; errorCode?: string | undefined; durationMs: number;"
+          )
+
+          # Use the current officially priced/available model ID.
+          for file in ('wrangler.jsonc', 'scripts/validate.py'):
+              replace_once(file, '@cf/meta/llama-3.1-8b-instruct-fast', '@cf/meta/llama-3.1-8b-instruct-fp8-fast')
+          replace_once(
+              'tests/unit/ai-claims.test.ts',
+              "@cf/meta/llama-3.1-8b-instruct-fast",
+              "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
+          )
+
+          # Persist safe requirement updates, versioned summaries and blocked critical claims.
+          replace_once(
+              'src/worker/queues.ts',
+              "import { first, nowIso, run, setting } from './db';",
+              "import { all, first, nowIso, run, setting } from './db';"
+          )
+          old_queue = """      for (const note of decision.note_updates) {
+        await run(env.DB, `INSERT INTO customer_notes (id, contact_id, conversation_id, source, note_text, created_at, updated_at) VALUES (?, ?, ?, 'ai', ?, ?, ?)`, crypto.randomUUID(), job.contactId, job.conversationId, note.text, nowIso(), nowIso());
+      }
+      if (decision.needs_human || decision.action === 'handoff') await createHandoff(env, job, decisionId, decision.intent, source.text_content);
+      const gate = await finalSendGate(env, job, decision);
+      if (gate.allowed && decision.reply.trim()) {
+"""
+          new_queue = """      for (const note of decision.note_updates) {
+        await run(env.DB, `INSERT INTO customer_notes (id, contact_id, conversation_id, source, note_text, created_at, updated_at) VALUES (?, ?, ?, 'ai', ?, ?, ?)`, crypto.randomUUID(), job.contactId, job.conversationId, note.text, nowIso(), nowIso());
+      }
+      await applyRequirementUpdates(env, job, decision.requirement_updates);
+      await maybeRefreshSummary(env, job, decision.needs_human || decision.action === 'handoff');
+      if (decision.needs_human || decision.action === 'handoff') await createHandoff(env, job, decisionId, decision.intent, source.text_content);
+      const gate = await finalSendGate(env, job, decision);
+      if (!gate.allowed && gate.reason === 'unapproved_price_claim') {
+        await run(env.DB, 'UPDATE ai_decisions SET blocked_reason=? WHERE id=?', gate.reason, decisionId);
+        await createHandoff(env, job, decisionId, 'unapproved_price_claim', 'AI doğrulanmamış bir fiyat veya para tutarı üretmeye çalıştı; otomatik mesaj engellendi.');
+      }
+      if (gate.allowed && decision.reply.trim()) {
+"""
+          replace_once('src/worker/queues.ts', old_queue, new_queue)
+          helper_marker = "\nfunction safeErrorCode(error: unknown): string {"
+          helpers = r'''
+
+const REQUIREMENT_COLUMNS: Record<string, 'text' | 'number' | 'boolean' | 'json'> = {
+  sector: 'text', website_type: 'text', requested_pages: 'json', admin_panel_required: 'boolean',
+  catalog_required: 'boolean', ecommerce_required: 'boolean', multilanguage_required: 'boolean',
+  domain_status: 'text', hosting_status: 'text', design_preferences: 'text', reference_websites: 'json',
+  budget_min: 'number', budget_max: 'number', currency_code: 'text', delivery_expectation: 'text',
+  quoted_price: 'number', discount_amount: 'number', payment_expectation: 'text', next_action: 'text', lead_stage: 'text'
+};
+const REQUIREMENT_DB_COLUMNS: Record<string, string> = {
+  requested_pages: 'requested_pages_json', reference_websites: 'reference_websites_json'
+};
+
+export async function applyRequirementUpdates(env: Env, job: InboundAiJob, updates: Record<string, unknown>): Promise<void> {
+  if (!updates || typeof updates !== 'object') return;
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, raw] of Object.entries(updates)) {
+    const kind = REQUIREMENT_COLUMNS[key];
+    if (!kind || raw === null || raw === undefined || raw === '') continue;
+    let value: unknown = raw;
+    if (kind === 'text') {
+      if (typeof raw !== 'string') continue;
+      value = raw.trim().slice(0, 4000);
+      if (!value) continue;
+    } else if (kind === 'number') {
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) continue;
+    } else if (kind === 'boolean') {
+      if (typeof raw !== 'boolean') continue;
+      value = raw ? 1 : 0;
+    } else if (kind === 'json') {
+      if (!Array.isArray(raw) || raw.length > 100) continue;
+      value = JSON.stringify(raw.filter(item => typeof item === 'string').map(item => item.slice(0, 500)));
+    }
+    assignments.push(`${REQUIREMENT_DB_COLUMNS[key] ?? key}=?`);
+    values.push(value);
+  }
+  if (!assignments.length) return;
+  const timestamp = nowIso();
+  await run(env.DB,
+    `INSERT OR IGNORE INTO customer_requirements (id,contact_id,conversation_id,updated_at) VALUES (?,?,?,?)`,
+    crypto.randomUUID(), job.contactId, job.conversationId, timestamp);
+  await run(env.DB,
+    `UPDATE customer_requirements SET ${assignments.join(',')}, updated_at=? WHERE conversation_id=? AND contact_id=?`,
+    ...values, timestamp, job.conversationId, job.contactId);
+}
+
+export async function maybeRefreshSummary(env: Env, job: InboundAiJob, force = false): Promise<void> {
+  const total = await first<{ count: number }>(env.DB,
+    'SELECT COUNT(*) AS count FROM messages WHERE conversation_id=? AND contact_id=?', job.conversationId, job.contactId);
+  const interval = Math.max(4, Math.min(50, Number(await setting(env.DB, 'ai_summary_message_interval') ?? '8')));
+  const latest = await first<{ version: number; through_message_id: string | null }>(env.DB,
+    'SELECT version,through_message_id FROM conversation_summaries WHERE conversation_id=? ORDER BY version DESC LIMIT 1', job.conversationId);
+  const expectedVersion = Math.floor((total?.count ?? 0) / interval);
+  if (!force && expectedVersion <= (latest?.version ?? 0)) return;
+  if (latest?.through_message_id === job.sourceMessageId) return;
+  const contact = await first<{ display_name: string }>(env.DB, 'SELECT display_name FROM contacts WHERE id=?', job.contactId);
+  const requirements = await first<Record<string, unknown>>(env.DB,
+    `SELECT sector,website_type,budget_min,budget_max,currency_code,delivery_expectation,next_action,lead_stage
+       FROM customer_requirements WHERE conversation_id=? AND contact_id=?`, job.conversationId, job.contactId);
+  const recent = await all<{ direction: string; text_content: string | null }>(env.DB,
+    `SELECT direction,text_content FROM messages WHERE conversation_id=? AND contact_id=? AND text_content IS NOT NULL
+      ORDER BY created_at DESC LIMIT 6`, job.conversationId, job.contactId);
+  const facts = Object.entries(requirements ?? {}).filter(([, value]) => value !== null && value !== '').map(([key, value]) => `${key}: ${String(value)}`);
+  const excerpts = recent.reverse().map(item => `${item.direction === 'inbound' ? 'Müşteri' : 'İşletme'}: ${(item.text_content ?? '').slice(0, 240)}`);
+  const summary = [`Müşteri: ${contact?.display_name ?? 'Bilinmiyor'}`, ...facts, ...excerpts].join('\n').slice(0, 4000);
+  await run(env.DB,
+    `INSERT INTO conversation_summaries (id,conversation_id,version,summary_text,facts_json,through_message_id,created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    crypto.randomUUID(), job.conversationId, (latest?.version ?? 0) + 1, summary,
+    JSON.stringify(requirements ?? {}), job.sourceMessageId, nowIso());
+}
+'''
+          replace_once('src/worker/queues.ts', helper_marker, helpers + helper_marker)
+
+          # Detailed Neuron usage API and configurable current allowance/budget.
+          replace_once(
+              'src/worker/extendedApi.ts',
+              "import { all, audit, first, nowIso, run } from './db';",
+              "import { all, audit, first, nowIso, run, setSetting, setting } from './db';"
+          )
+          usage_insert_marker = "extendedApiRoutes.use('*', requireAuth);\n"
+          usage_code = r'''
+
+type NeuronUsageSummary = {
+  usedNeurons: number;
+  entitlementNeurons: number;
+  freeAllocationNeurons: number;
+  remainingNeurons: number;
+  overageNeurons: number;
+  usagePercent: number;
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  resetAt: string;
+  periodStart: string;
+  source: 'local_model_usage';
+};
+
+async function neuronUsageSummary(db: D1Database): Promise<NeuronUsageSummary> {
+  const row = await first<{ neurons: number; input_tokens: number; output_tokens: number; requests: number; successful: number; failed: number }>(db,
+    `SELECT COALESCE(SUM(estimated_neurons),0) AS neurons,
+            COALESCE(SUM(input_tokens),0) AS input_tokens,
+            COALESCE(SUM(output_tokens),0) AS output_tokens,
+            COUNT(*) AS requests,
+            COALESCE(SUM(CASE WHEN success=1 THEN 1 ELSE 0 END),0) AS successful,
+            COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) AS failed
+       FROM ai_usage_records WHERE created_at >= date('now')`);
+  const entitlement = Math.max(1, Number(await setting(db, 'ai_daily_neuron_limit') ?? '10000'));
+  const used = Math.max(0, Number(row?.neurons ?? 0));
+  const reset = new Date();
+  reset.setUTCHours(24, 0, 0, 0);
+  return {
+    usedNeurons: roundNeuron(used),
+    entitlementNeurons: roundNeuron(entitlement),
+    freeAllocationNeurons: 10000,
+    remainingNeurons: roundNeuron(Math.max(0, entitlement - used)),
+    overageNeurons: roundNeuron(Math.max(0, used - entitlement)),
+    usagePercent: Math.round((used / entitlement) * 10000) / 100,
+    inputTokens: Number(row?.input_tokens ?? 0),
+    outputTokens: Number(row?.output_tokens ?? 0),
+    requests: Number(row?.requests ?? 0),
+    successfulRequests: Number(row?.successful ?? 0),
+    failedRequests: Number(row?.failed ?? 0),
+    resetAt: reset.toISOString(),
+    periodStart: `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`,
+    source: 'local_model_usage'
+  };
+}
+function roundNeuron(value: number): number { return Math.round(value * 1_000_000) / 1_000_000; }
+
+extendedApiRoutes.get('/ai/usage', async c => ok(c, await neuronUsageSummary(c.env.DB)));
+extendedApiRoutes.put('/ai/usage-limit', zValidator('json', z.object({ entitlementNeurons: z.number().int().min(1).max(100_000_000) })), async c => {
+  const { entitlementNeurons } = c.req.valid('json');
+  await setSetting(c.env.DB, 'ai_daily_neuron_limit', entitlementNeurons, c.get('adminId'));
+  await audit(c.env.DB, c.get('adminId')!, 'ai.neuron_limit_changed', 'system', null, { entitlementNeurons }, c.get('requestId'));
+  return ok(c, await neuronUsageSummary(c.env.DB));
+});
+'''
+          replace_once('src/worker/extendedApi.ts', usage_insert_marker, usage_insert_marker + usage_code)
+          replace_once(
+              'src/worker/extendedApi.ts',
+              "  return ok(c, { daily, delivery, openHandoffs: handoffs?.total ?? 0, leadStages: leads, ai: ai ?? { total: 0, neurons: 0 } });",
+              "  return ok(c, { daily, delivery, openHandoffs: handoffs?.total ?? 0, leadStages: leads, ai: ai ?? { total: 0, neurons: 0 }, aiUsage: await neuronUsageSummary(c.env.DB) });"
+          )
+
+          # Dashboard exact usage values.
+          replace_once(
+              'src/worker/api.ts',
+              "  return ok(c, { contacts: contacts?.count ?? 0, activeConversations: conversations?.count ?? 0, unreadMessages: unread?.count ?? 0, openHandoffs: handoffs?.count ?? 0, failedMessages: failed?.count ?? 0, unreadNotifications: notifications?.count ?? 0, estimatedNeuronsToday: usage?.neurons ?? 0 });",
+              "  const neuronLimit = Math.max(1, Number(await setting(c.env.DB, 'ai_daily_neuron_limit') ?? '10000'));\n  const neuronUsed = Math.max(0, Number(usage?.neurons ?? 0));\n  return ok(c, { contacts: contacts?.count ?? 0, activeConversations: conversations?.count ?? 0, unreadMessages: unread?.count ?? 0, openHandoffs: handoffs?.count ?? 0, failedMessages: failed?.count ?? 0, unreadNotifications: notifications?.count ?? 0, neuronUsed, neuronLimit, neuronRemaining: Math.max(0, neuronLimit-neuronUsed), neuronPercent: Math.round((neuronUsed/neuronLimit)*10000)/100 });"
+          )
+
+          # Frontend: exact usage on dashboard, reports, files and AI control.
+          replace_once(
+              'src/frontend/pages/core.tsx',
+              "['openHandoffs','İnsan devri'], ['failedMessages','Başarısız mesaj'], ['unreadNotifications','Bildirim'], ['estimatedNeuronsToday','Bugünkü Neuron']",
+              "['openHandoffs','İnsan devri'], ['failedMessages','Başarısız mesaj'], ['unreadNotifications','Bildirim'], ['neuronUsed','Kullanılan Neuron'], ['neuronLimit','Mevcut Neuron hakkı'], ['neuronRemaining','Kalan Neuron'], ['neuronPercent','Kullanım yüzdesi']"
+          )
+          replace_once(
+              'src/frontend/pages/core.tsx',
+              "<a href={`/api/attachments/${item.id}`}>",
+              "<a href={`/api/conversations/${item.conversation_id}/attachments/${item.id}`} >"
+          )
+          old_reports = """export function ReportsPage({notify}:{notify:Notify}){const[data,setData]=useState<any>(null);useEffect(()=>{void api('/api/reports/overview').then(setData).catch((error:Error)=>notify(error.message,'error'));},[notify]);return <div className="page-stack"><section className="metrics"><article className="metric"><span>Açık insan devri</span><strong>{data?.openHandoffs??'—'}</strong></article><article className="metric"><span>30 günlük AI işlemi</span><strong>{data?.ai?.total??'—'}</strong></article><article className="metric"><span>Tahmini Neuron</span><strong>{data?.ai?.neurons??'—'}</strong></article></section>"""
+          new_reports = """export function ReportsPage({notify}:{notify:Notify}){const[data,setData]=useState<any>(null);useEffect(()=>{void api('/api/reports/overview').then(setData).catch((error:Error)=>notify(error.message,'error'));},[notify]);return <div className="page-stack"><section className="metrics"><article className="metric"><span>Açık insan devri</span><strong>{data?.openHandoffs??'—'}</strong></article><article className="metric"><span>30 günlük AI işlemi</span><strong>{data?.ai?.total??'—'}</strong></article><article className="metric"><span>Bugün kullanılan Neuron</span><strong>{formatNumber(data?.aiUsage?.usedNeurons)}</strong></article><article className="metric"><span>Mevcut günlük hak</span><strong>{formatNumber(data?.aiUsage?.entitlementNeurons)}</strong></article><article className="metric"><span>Kalan hak</span><strong>{formatNumber(data?.aiUsage?.remainingNeurons)}</strong></article><article className="metric"><span>Kullanım</span><strong>%{formatNumber(data?.aiUsage?.usagePercent)}</strong></article></section>"""
+          replace_once('src/frontend/pages/core.tsx', old_reports, new_reports)
+          replace_once(
+              'src/frontend/pages/core.tsx',
+              "export function Empty({text}:{text:string}){return <div className=\"empty\">{text}</div>}",
+              "export function Empty({text}:{text:string}){return <div className=\"empty\">{text}</div>}\nexport function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?number.toLocaleString('tr-TR',{maximumFractionDigits:6}):'—';}"
+          )
+
+          replace_once(
+              'src/frontend/pages/knowledgeAi.tsx',
+              "type AiSettings={globalMode:'off'|'suggestion'|'auto'|'business_hours';autoReplyEnabled:boolean;suggestionMode:boolean;businessInstructions:string;handoffRules:string[];minimumConfidence:number;recentMessageCount:number;debounceSeconds:number};",
+              "type AiSettings={globalMode:'off'|'suggestion'|'auto'|'business_hours';autoReplyEnabled:boolean;suggestionMode:boolean;businessInstructions:string;handoffRules:string[];minimumConfidence:number;recentMessageCount:number;debounceSeconds:number};\ntype AiUsage={usedNeurons:number;entitlementNeurons:number;freeAllocationNeurons:number;remainingNeurons:number;overageNeurons:number;usagePercent:number;inputTokens:number;outputTokens:number;requests:number;successfulRequests:number;failedRequests:number;resetAt:string;source:string};"
+          )
+          replace_once(
+              'src/frontend/pages/knowledgeAi.tsx',
+              "const[settings,setSettings]=useState<AiSettings|null>(null);const[messages,setMessages]",
+              "const[settings,setSettings]=useState<AiSettings|null>(null);const[usage,setUsage]=useState<AiUsage|null>(null);const[messages,setMessages]"
+          )
+          replace_once(
+              'src/frontend/pages/knowledgeAi.tsx',
+              "const load=useCallback(()=>void api<AiSettings>('/api/ai/settings').then(setSettings).catch(error=>notify(error.message,'error')),[notify]);useEffect(()=>{load();},[load]);",
+              "const load=useCallback(()=>void Promise.all([api<AiSettings>('/api/ai/settings'),api<AiUsage>('/api/ai/usage')]).then(([value,usageValue])=>{setSettings(value);setUsage(usageValue);}).catch(error=>notify(error.message,'error')),[notify]);useEffect(()=>{load();},[load]);"
+          )
+          replace_once(
+              'src/frontend/pages/knowledgeAi.tsx',
+              "  async function emergency(){",
+              "  async function saveNeuronLimit(event:FormEvent<HTMLFormElement>){event.preventDefault();const form=event.currentTarget;try{const result=await api<AiUsage>('/api/ai/usage-limit',{method:'PUT',...jsonBody({entitlementNeurons:Number(formValue(form,'entitlementNeurons'))})});setUsage(result);notify('Mevcut Neuron hakkı/bütçesi güncellendi.','success');}catch(error){notify(error instanceof Error?error.message:'Neuron hakkı güncellenemedi.','error');}}\n  async function emergency(){"
+          )
+          usage_panel = """<section className="panel"><div className="panel-heading"><div><h3>Günlük Neuron Kullanımı</h3><p>Kullanım, Workers AI yanıtlarındaki token sayıları ve Cloudflare’ın güncel model katsayılarıyla kaydedilir. Sıfırlanma 00:00 UTC’dir.</p></div><span className={`pill ${(usage?.usagePercent??0)>=90?'warn':'ready'}`}>%{usage?.usagePercent?.toLocaleString('tr-TR')??'0'}</span></div><section className="metrics"><article className="metric"><span>Kullanılan</span><strong>{usage?.usedNeurons?.toLocaleString('tr-TR',{maximumFractionDigits:6})??'—'}</strong></article><article className="metric"><span>Mevcut hak / bütçe</span><strong>{usage?.entitlementNeurons?.toLocaleString('tr-TR')??'—'}</strong></article><article className="metric"><span>Kalan</span><strong>{usage?.remainingNeurons?.toLocaleString('tr-TR',{maximumFractionDigits:6})??'—'}</strong></article><article className="metric"><span>Aşım</span><strong>{usage?.overageNeurons?.toLocaleString('tr-TR',{maximumFractionDigits:6})??'—'}</strong></article><article className="metric"><span>Giriş tokeni</span><strong>{usage?.inputTokens?.toLocaleString('tr-TR')??'—'}</strong></article><article className="metric"><span>Çıkış tokeni</span><strong>{usage?.outputTokens?.toLocaleString('tr-TR')??'—'}</strong></article><article className="metric"><span>Başarılı / toplam</span><strong>{usage?`${usage.successfulRequests}/${usage.requests}`:'—'}</strong></article><article className="metric"><span>Başarısız</span><strong>{usage?.failedRequests?.toLocaleString('tr-TR')??'—'}</strong></article></section><div className="neuron-progress" aria-label="Neuron kullanım oranı"><i style={{width:`${Math.min(100,usage?.usagePercent??0)}%`}} /></div><p className="safe-note">Ücretsiz günlük tahsis: {usage?.freeAllocationNeurons?.toLocaleString('tr-TR')??'10.000'} Neuron · Sonraki sıfırlanma: {usage?new Date(usage.resetAt).toLocaleString('tr-TR',{timeZone:'Europe/Istanbul'}):'—'}</p><form className="inline-fields" onSubmit={saveNeuronLimit}><label>Mevcut günlük hak / kullanım bütçesi<input name="entitlementNeurons" type="number" min="1" max="100000000" defaultValue={usage?.entitlementNeurons??10000} required /></label><div className="form-actions"><button className="button secondary">Neuron Hakkını Kaydet</button></div></form></section>"""
+          replace_once(
+              'src/frontend/pages/knowledgeAi.tsx',
+              "return <div className=\"page-stack\"><section className=\"panel danger-panel\">",
+              "return <div className=\"page-stack\">" + usage_panel + "<section className=\"panel danger-panel\">"
+          )
+          replace_once(
+              'src/frontend/styles.css',
+              ".safe-note{font-size:12px;color:#98a6bd;margin-top:12px}",
+              ".safe-note{font-size:12px;color:#98a6bd;margin-top:12px}.neuron-progress{height:12px;background:#242e43;border-radius:999px;overflow:hidden;margin-top:16px}.neuron-progress i{display:block;height:100%;background:linear-gradient(90deg,var(--purple),var(--cyan));border-radius:999px}"
+          )
+      - name: Remove one-shot files and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .completion-patch-trigger .ai-state-trigger
+          rm -f .github/workflows/apply-completion-patch.yml .github/workflows/one-shot-ai-state.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: complete AI state and exact Neuron accounting"
+          git push origin HEAD:agent/wpai-production-rebuild
