@@ -1,0 +1,147 @@
+name: Apply one-shot AI state persistence patch
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.ai-state-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - name: Patch AI state handling
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/worker/queues.ts')
+          text = path.read_text('utf-8')
+          old = """  for (const note of decision.note_updates) {
+    await run(env.DB, `INSERT INTO customer_notes (id, contact_id, conversation_id, source, note_text, created_at, updated_at) VALUES (?, ?, ?, 'ai', ?, ?, ?)`, crypto.randomUUID(), job.contactId, job.conversationId, note.text, nowIso(), nowIso());
+  }
+  if (decision.needs_human || decision.action === 'handoff') {
+    await createHandoff(env, job, decisionId, decision.intent, decision.reply || 'AI insan müdahalesi istedi.');
+  }
+  const gate = await finalSendGate(env, job, decision);
+  if (!gate.allowed) {
+    await run(env.DB, "UPDATE ai_jobs SET status='completed', updated_at=? WHERE id=?", nowIso(), job.jobId);
+    message.ack(); return;
+  }
+"""
+          new = """  for (const note of decision.note_updates) {
+    await run(env.DB, `INSERT INTO customer_notes (id, contact_id, conversation_id, source, note_text, created_at, updated_at) VALUES (?, ?, ?, 'ai', ?, ?, ?)`, crypto.randomUUID(), job.contactId, job.conversationId, note.text, nowIso(), nowIso());
+  }
+  await applyRequirementUpdates(env, job, decision.requirement_updates);
+  await maybeRefreshSummary(env, job, decision.needs_human || decision.action === 'handoff');
+  if (decision.needs_human || decision.action === 'handoff') {
+    await createHandoff(env, job, decisionId, decision.intent, decision.reply || 'AI insan müdahalesi istedi.');
+  }
+  const gate = await finalSendGate(env, job, decision);
+  if (!gate.allowed) {
+    if (gate.reason === 'unapproved_price_claim') {
+      await run(env.DB, 'UPDATE ai_decisions SET blocked_reason=? WHERE id=?', gate.reason, decisionId);
+      await createHandoff(env, job, decisionId, 'unapproved_price_claim', 'AI doğrulanmamış bir fiyat veya para tutarı üretmeye çalıştı; otomatik mesaj engellendi.');
+    }
+    await run(env.DB, "UPDATE ai_jobs SET status='completed', updated_at=? WHERE id=?", nowIso(), job.jobId);
+    message.ack(); return;
+  }
+"""
+          if text.count(old) != 1:
+              raise SystemExit('Inbound state target not found exactly once')
+          text = text.replace(old, new)
+          marker = "\nfunction safeErrorCode(error: unknown): string {"
+          if text.count(marker) != 1:
+              raise SystemExit('Helper insertion marker not found exactly once')
+          helpers = r'''
+
+const REQUIREMENT_COLUMNS: Record<string, 'text' | 'number' | 'boolean' | 'json'> = {
+  sector: 'text', website_type: 'text', requested_pages: 'json', admin_panel_required: 'boolean',
+  catalog_required: 'boolean', ecommerce_required: 'boolean', multilanguage_required: 'boolean',
+  domain_status: 'text', hosting_status: 'text', design_preferences: 'text', reference_websites: 'json',
+  budget_min: 'number', budget_max: 'number', currency_code: 'text', delivery_expectation: 'text',
+  quoted_price: 'number', discount_amount: 'number', payment_expectation: 'text', next_action: 'text', lead_stage: 'text'
+};
+const REQUIREMENT_DB_COLUMNS: Record<string, string> = {
+  requested_pages: 'requested_pages_json', reference_websites: 'reference_websites_json'
+};
+
+export async function applyRequirementUpdates(env: Env, job: InboundAiJob, updates: Record<string, unknown>): Promise<void> {
+  if (!updates || typeof updates !== 'object') return;
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, raw] of Object.entries(updates)) {
+    const kind = REQUIREMENT_COLUMNS[key];
+    if (!kind || raw === null || raw === undefined || raw === '') continue;
+    let value: unknown = raw;
+    if (kind === 'text') {
+      if (typeof raw !== 'string') continue;
+      value = raw.trim().slice(0, 4000);
+      if (!value) continue;
+    } else if (kind === 'number') {
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) continue;
+    } else if (kind === 'boolean') {
+      if (typeof raw !== 'boolean') continue;
+      value = raw ? 1 : 0;
+    } else if (kind === 'json') {
+      if (!Array.isArray(raw) || raw.length > 100) continue;
+      value = JSON.stringify(raw.filter(item => typeof item === 'string').map(item => item.slice(0, 500)));
+    }
+    const column = REQUIREMENT_DB_COLUMNS[key] ?? key;
+    assignments.push(`${column}=?`);
+    values.push(value);
+  }
+  if (!assignments.length) return;
+  const timestamp = nowIso();
+  await run(env.DB,
+    `INSERT OR IGNORE INTO customer_requirements (id,contact_id,conversation_id,updated_at) VALUES (?,?,?,?)`,
+    crypto.randomUUID(), job.contactId, job.conversationId, timestamp);
+  await run(env.DB,
+    `UPDATE customer_requirements SET ${assignments.join(',')}, updated_at=? WHERE conversation_id=? AND contact_id=?`,
+    ...values, timestamp, job.conversationId, job.contactId);
+}
+
+export async function maybeRefreshSummary(env: Env, job: InboundAiJob, force = false): Promise<void> {
+  const total = await first<{ count: number }>(env.DB,
+    'SELECT COUNT(*) AS count FROM messages WHERE conversation_id=? AND contact_id=?', job.conversationId, job.contactId);
+  const interval = Math.max(4, Math.min(50, Number(await setting(env.DB, 'ai_summary_message_interval') ?? '8')));
+  const latest = await first<{ version: number; through_message_id: string | null }>(env.DB,
+    'SELECT version,through_message_id FROM conversation_summaries WHERE conversation_id=? ORDER BY version DESC LIMIT 1', job.conversationId);
+  const expectedVersion = Math.floor((total?.count ?? 0) / interval);
+  if (!force && expectedVersion <= (latest?.version ?? 0)) return;
+  if (latest?.through_message_id === job.sourceMessageId) return;
+  const contact = await first<{ display_name: string }>(env.DB, 'SELECT display_name FROM contacts WHERE id=?', job.contactId);
+  const requirements = await first<Record<string, unknown>>(env.DB,
+    `SELECT sector,website_type,budget_min,budget_max,currency_code,delivery_expectation,next_action,lead_stage
+       FROM customer_requirements WHERE conversation_id=? AND contact_id=?`, job.conversationId, job.contactId);
+  const recent = await all<{ direction: string; text_content: string | null }>(env.DB,
+    `SELECT direction,text_content FROM messages WHERE conversation_id=? AND contact_id=? AND text_content IS NOT NULL
+      ORDER BY created_at DESC LIMIT 6`, job.conversationId, job.contactId);
+  const facts = Object.entries(requirements ?? {}).filter(([, value]) => value !== null && value !== '').map(([key, value]) => `${key}: ${String(value)}`);
+  const excerpts = recent.reverse().map(item => `${item.direction === 'inbound' ? 'Müşteri' : 'İşletme'}: ${(item.text_content ?? '').slice(0, 240)}`);
+  const summary = [`Müşteri: ${contact?.display_name ?? 'Bilinmiyor'}`, ...facts, ...excerpts].join('\n').slice(0, 4000);
+  await run(env.DB,
+    `INSERT INTO conversation_summaries (id,conversation_id,version,summary_text,facts_json,through_message_id,created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    crypto.randomUUID(), job.conversationId, (latest?.version ?? 0) + 1, summary,
+    JSON.stringify(requirements ?? {}), job.sourceMessageId, nowIso());
+}
+'''
+          text = text.replace(marker, helpers + marker)
+          path.write_text(text, 'utf-8')
+      - name: Commit and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .ai-state-trigger .github/workflows/one-shot-ai-state.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "ai: persist structured requirements, summaries and blocked claims"
+          git push origin HEAD:agent/wpai-production-rebuild
