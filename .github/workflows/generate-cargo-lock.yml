@@ -1,0 +1,37 @@
+name: Generate deterministic Cargo lockfile
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths: [.cargo-lock-trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate and verify Cargo.lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+          test -s src-tauri/Cargo.lock
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps >/dev/null
+      - name: Commit lockfile and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .cargo-lock-trigger .github/workflows/generate-cargo-lock.yml
+          git config user.name "WPAI Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "build: add deterministic Cargo lockfile"
+          git push origin HEAD:agent/wpai-production-rebuild
