@@ -30,5 +30,8 @@ describe('conversation-scoped R2 access', () => {
 
     const crossConversation = await request(`/api/conversations/${conversationB}/attachments/${attachment}`, { headers: { Cookie: auth.cookie } });
     expect(crossConversation.status).toBe(404);
+
+    const legacyUnscoped = await request(`/api/attachments/${attachment}`, { headers: { Cookie: auth.cookie } });
+    expect(legacyUnscoped.status).toBe(410);
   });
 });
