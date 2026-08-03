@@ -17,6 +17,9 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere
 .neuron-source-note,.neuron-quota-row span{overflow-wrap:anywhere}
 .neuron-history th,.neuron-history td{white-space:normal;min-width:90px}
 .toast{overflow-wrap:anywhere}
+.csv-file-input{display:block;width:100%;max-width:100%;min-width:0;overflow:hidden}
+.csv-file-input::file-selector-button{max-width:100%;white-space:normal;margin-right:10px}
+.file-commit{min-width:0;max-width:100%}
 
 @media(max-width:840px){
   .sidebar{min-width:0}
@@ -55,6 +58,7 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere
   .composer>div .button{width:100%}
   .auth-card{padding:20px;overflow:hidden}
   .webhook{padding:10px}
+  .csv-file-input::file-selector-button{display:block;width:100%;margin:0 0 8px}
 }
 
 @media(max-width:360px){
