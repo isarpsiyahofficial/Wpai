@@ -248,7 +248,19 @@ trainingApiRoutes.post('/training/items', zValidator('json', ItemSchema), async 
   if (input.validFrom && input.validUntil && input.validFrom >= input.validUntil) {
     return fail(c, 'VALIDITY_RANGE_INVALID', 'Geçerlilik başlangıcı bitişten önce olmalıdır.', 422);
   }
-  const checksum = await itemChecksum(input);
+  const checksum = await itemChecksum({
+    itemType: input.itemType,
+    title: input.title,
+    content: input.content,
+    expectedResponse: input.expectedResponse ?? null,
+    usagePermission: input.usagePermission,
+    scope: input.scope,
+    contactId: input.contactId ?? null,
+    conversationId: input.conversationId ?? null,
+    priority: input.priority,
+    validFrom: input.validFrom ?? null,
+    validUntil: input.validUntil ?? null
+  });
   const duplicate = await first<{ id: string }>(c.env.DB,
     'SELECT id FROM ai_training_items WHERE checksum=? AND deleted_at IS NULL LIMIT 1', checksum);
   if (duplicate) return fail(c, 'TRAINING_ITEM_DUPLICATE', 'Aynı eğitim kaydı zaten mevcut.', 409);
@@ -440,13 +452,13 @@ trainingApiRoutes.post('/training/sources', async c => {
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const converted = await c.env.AI.toMarkdown(
       { name: file.name, blob: new Blob([buffer], { type: file.type }) },
-      { conversionOptions: { output: { format: 'markdown' }, pdf: { metadata: false } } }
+      { conversionOptions: { pdf: { metadata: false } } }
     );
     const conversion = parseConversion(converted);
     const extracted = conversion.data?.trim() ?? '';
     if (!extracted || conversion.format === 'error') throw new Error(conversion.error || 'DOCUMENT_CONVERSION_FAILED');
     const itemId = crypto.randomUUID();
-    const itemChecksum = await itemChecksum({
+    const draftChecksum = await itemChecksum({
       itemType: 'knowledge_draft', title, content: extracted, expectedResponse: null,
       usagePermission: 'both', scope: 'global', contactId: null, conversationId: null,
       priority: 100, validFrom: null, validUntil: null
@@ -465,7 +477,7 @@ trainingApiRoutes.post('/training/sources', async c => {
         `INSERT INTO ai_training_items
           (id,thread_id,item_type,title,content,status,usage_permission,scope,priority,checksum,created_by_admin_id,created_at,updated_at)
          VALUES (?,?,'knowledge_draft',?,?,'draft','both','global',100,?,?,?,?)`
-      ).bind(itemId, threadId, title, extracted, itemChecksum, c.get('adminId')!, finished, finished)
+      ).bind(itemId, threadId, title, extracted, draftChecksum, c.get('adminId')!, finished, finished)
     ]);
     if (writeResults.some(result => !result.success)) throw new Error('SOURCE_EXTRACTION_WRITE_FAILED');
     await audit(c.env.DB, c.get('adminId')!, 'training.source_converted', 'knowledge_source', id,
