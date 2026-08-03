@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { authRoutes } from './auth';
+import { desktopAuthRoutes } from './desktopAuth';
 import { apiRoutes } from './api';
 import { extendedApiRoutes } from './extendedApi';
 import { scopedFileRoutes } from './scopedFiles';
@@ -14,10 +15,27 @@ import type { AppContext, DeadLetterJob, Env, KnowledgeSyncJob } from './types';
 import { consumeKnowledgeSync, enqueueKnowledgeSync, vectorStatus } from './vectorSync';
 
 const app = new Hono<AppContext>();
+const DESKTOP_ORIGINS = new Set(['http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost']);
 
 app.use('*', async (c, next) => {
   c.set('requestId', c.req.header('cf-ray') ?? crypto.randomUUID());
+  const origin = c.req.header('Origin') ?? '';
+  const desktopOrigin = DESKTOP_ORIGINS.has(origin);
+  if (c.req.method === 'OPTIONS') {
+    if (!desktopOrigin) return c.body(null, 403);
+    c.header('Access-Control-Allow-Origin', origin);
+    c.header('Vary', 'Origin');
+    c.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    c.header('Access-Control-Allow-Headers', 'Authorization,Content-Type,X-CSRF-Token');
+    c.header('Access-Control-Max-Age', '600');
+    return c.body(null, 204);
+  }
   await next();
+  if (desktopOrigin) {
+    c.header('Access-Control-Allow-Origin', origin);
+    c.header('Vary', 'Origin');
+    c.header('Access-Control-Expose-Headers', 'Content-Type,Content-Disposition,X-Request-Id');
+  }
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('X-Frame-Options', 'DENY');
   c.header('Referrer-Policy', 'no-referrer');
@@ -29,9 +47,7 @@ app.get('/health', async c => {
   const deep = c.req.query('deep') === '1';
   const d1 = await c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>().then(row => row?.ok === 1).catch(() => false);
   const meta = d1 && (await setting(c.env.DB, 'meta_connection_enabled').catch(() => null)) === 'true';
-  const r2Operational = deep
-    ? await c.env.FILES.list({ limit: 1 }).then(() => true).catch(() => false)
-    : null;
+  const r2Operational = deep ? await c.env.FILES.list({ limit: 1 }).then(() => true).catch(() => false) : null;
   const vector = d1 ? await vectorStatus(c.env).catch(() => null) : null;
   const probeVector = new Array<number>(1024).fill(0);
   probeVector[0] = 1;
@@ -59,6 +75,7 @@ app.get('/health', async c => {
 });
 
 app.all('/api/attachments/:id', c => c.json({ ok: false, error: { code: 'SCOPED_FILE_ROUTE_REQUIRED', message: 'Dosya erişimi için konuşma kimliği gereklidir.', requestId: c.get('requestId') } }, 410));
+app.route('/api/auth', desktopAuthRoutes);
 app.route('/api/auth', authRoutes);
 app.route('/api', apiRoutes);
 app.route('/api', extendedApiRoutes);
@@ -81,11 +98,11 @@ app.onError((error, c) => {
 
 export async function runScheduled(env: Env): Promise<void> {
   const now = nowIso();
-  const due = await env.DB.prepare("SELECT id, contact_id, conversation_id, title FROM follow_up_tasks WHERE status='pending' AND due_at <= ? ORDER BY due_at LIMIT 100").bind(now).all<{ id: string; contact_id: string; conversation_id: string | null; title: string }>();
+  const due = await env.DB.prepare("SELECT id,contact_id,conversation_id,title FROM follow_up_tasks WHERE status='pending' AND due_at<=? ORDER BY due_at LIMIT 100").bind(now).all<{ id: string; contact_id: string; conversation_id: string | null; title: string }>();
   for (const task of due.results) {
     const key = `followup:${task.id}`;
     const existing = await first<{ id: string }>(env.DB, 'SELECT id FROM admin_notifications WHERE deduplication_key=? LIMIT 1', key);
-    if (!existing) await run(env.DB, `INSERT INTO admin_notifications (id,type,priority,status,contact_id,conversation_id,title,body,deduplication_key,created_at,updated_at) VALUES (?, 'follow_up', 'normal', 'unread', ?, ?, 'Takip görevi geldi', ?, ?, ?, ?)`, crypto.randomUUID(), task.contact_id, task.conversation_id, task.title.slice(0,1000), key, now, now);
+    if (!existing) await run(env.DB, `INSERT INTO admin_notifications (id,type,priority,status,contact_id,conversation_id,title,body,deduplication_key,created_at,updated_at) VALUES (?, 'follow_up', 'normal', 'unread', ?, ?, 'Takip görevi geldi', ?, ?, ?, ?)`, crypto.randomUUID(), task.contact_id, task.conversation_id, task.title.slice(0, 1000), key, now, now);
   }
 
   const pendingKnowledge = await all<{ id: string; status: string; vector_status: string }>(env.DB,
@@ -93,9 +110,8 @@ export async function runScheduled(env: Env): Promise<void> {
       WHERE deleted_at IS NULL AND ((status='approved' AND vector_status IN ('pending','failed')) OR status<>'approved')
       ORDER BY updated_at LIMIT 100`);
   for (const item of pendingKnowledge) {
-    if (item.status === 'approved') {
-      await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'upsert' });
-    } else {
+    if (item.status === 'approved') await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'upsert' });
+    else {
       const hasChunks = await first<{ count: number }>(env.DB, 'SELECT COUNT(*) AS count FROM knowledge_chunks WHERE knowledge_id=?', item.id);
       if ((hasChunks?.count ?? 0) > 0) await enqueueKnowledgeSync(env, { knowledgeId: item.id, operation: 'delete' });
     }
@@ -109,9 +125,7 @@ export default {
   fetch: app.fetch,
   queue(batch: MessageBatch<unknown>, env: Env) {
     if (batch.queue === 'wa-knowledge-index') return consumeKnowledgeSync(batch as MessageBatch<KnowledgeSyncJob>, env);
-    if (batch.queue === 'wa-ai-dlq' || batch.queue === 'wa-outbound-dlq') {
-      return consumeDeadLetterBatch(batch as MessageBatch<DeadLetterJob>, env);
-    }
+    if (batch.queue === 'wa-ai-dlq' || batch.queue === 'wa-outbound-dlq') return consumeDeadLetterBatch(batch as MessageBatch<DeadLetterJob>, env);
     return handleQueue(batch, env);
   },
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) { ctx.waitUntil(runScheduled(env)); }
