@@ -248,7 +248,7 @@ export async function finalSendGate(env: Env, job: InboundAiJob, decision: AiDec
 
 async function recordAiUsage(env: Env, input: {
   model: string; operationType: string; inputTokens: number; outputTokens: number;
-  conversationId?: string; success: boolean; errorCode?: string; durationMs: number;
+  conversationId?: string | undefined; success: boolean; errorCode?: string | undefined; durationMs: number;
 }): Promise<void> {
   const estimatedNeurons = estimateNeurons(input.model, input.inputTokens, input.outputTokens);
   await run(env.DB,
