@@ -18,9 +18,7 @@ function installCloudflareMock(state: State) {
     if (path === '/user/tokens/verify') result = { status: 'active' };
     else if (path === `/accounts/${accountId}`) result = { id: accountId, name: 'WPAI Account' };
     else if (path === `/accounts/${accountId}/d1/database` && method === 'GET') result = state.d1 ? [{ uuid: state.wrongD1 ? 'wrong-id' : projectInfrastructureManifest.d1Id, name: projectInfrastructureManifest.d1 }] : [];
-    else if (path === `/accounts/${accountId}/d1/database` && method === 'POST') { state.d1 = true; result = { uuid: projectInfrastructureManifest.d1Id, name: projectInfrastructureManifest.d1 }; }
     else if (path === `/accounts/${accountId}/r2/buckets` && method === 'GET') result = { buckets: state.r2 ? [{ name: projectInfrastructureManifest.r2 }] : [] };
-    else if (path === `/accounts/${accountId}/r2/buckets/${projectInfrastructureManifest.r2}` && method === 'PUT') { state.r2 = true; result = null; }
     else if (path === `/accounts/${accountId}/queues` && method === 'GET') result = { queues: [...state.queues].map((name, index) => ({ id: `q-${index}`, name })) };
     else if (path === `/accounts/${accountId}/queues` && method === 'POST') { state.queues.add((body as { queue_name: string }).queue_name); result = { id: 'new-q' }; }
     else if (path === `/accounts/${accountId}/workers/scripts`) result = { scripts: state.worker ? [{ id: projectInfrastructureManifest.worker }] : [] };
@@ -53,16 +51,42 @@ describe('Cloudflare infrastructure scan and repair', () => {
     expect(report.plan.find(item => item.resource === 'd1')?.action).toBe('review');
   });
 
-  it('creates only selected missing WPAI resources and never deletes', async () => {
-    const state: State = { d1: true, r2: false, queues: new Set(), worker: false, vector: false };
+  it('creates only the permitted knowledge queue and Vectorize index', async () => {
+    const existingQueues = projectInfrastructureManifest.queues.filter(name => name !== projectInfrastructureManifest.knowledgeQueue);
+    const state: State = { d1: false, r2: false, queues: new Set(existingQueues), worker: false, vector: false };
     const calls = installCloudflareMock(state);
-    const result = await repairInfrastructure(accountId, token, ['r2', 'queue:wa-inbound-ai', 'vectorize', 'worker', 'queue:not-ours']);
-    expect(result.applied).toEqual(expect.arrayContaining(['r2', 'queue:wa-inbound-ai', 'vectorize']));
-    expect(result.applied).not.toContain('worker');
-    expect(state.queues.has('wa-inbound-ai')).toBe(true);
+    const result = await repairInfrastructure(accountId, token, [
+      'd1', 'r2', 'worker', 'queue:wa-inbound-ai',
+      `queue:${projectInfrastructureManifest.knowledgeQueue}`, 'vectorize', 'queue:not-ours'
+    ]);
+    expect(result.applied).toEqual([
+      `queue:${projectInfrastructureManifest.knowledgeQueue}`,
+      'vectorize'
+    ]);
+    expect(result.skipped).toEqual(expect.arrayContaining(['d1', 'r2', 'worker']));
+    expect(state.queues.has(projectInfrastructureManifest.knowledgeQueue)).toBe(true);
     expect(state.queues.has('not-ours')).toBe(false);
     expect(calls.some(call => call.method === 'DELETE')).toBe(false);
     expect(calls.some(call => call.path.includes('/dns_records'))).toBe(false);
+    expect(calls.some(call => call.path.includes('/d1/database') && call.method === 'POST')).toBe(false);
+    expect(calls.some(call => call.path.includes('/r2/buckets/') && call.method !== 'GET')).toBe(false);
+  });
+
+  it('reports wrong-dimension Vectorize as non-repairable', async () => {
+    const calls = installCloudflareMock({ d1: true, r2: true, queues: new Set(projectInfrastructureManifest.queues), worker: true, vector: false });
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname.replace('/client/v4', '');
+      if (path === `/accounts/${accountId}/vectorize/v2/indexes` && (init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ success: true, result: { indexes: [{ name: projectInfrastructureManifest.vectorize, config: { dimensions: 768, metric: 'cosine' } }] } }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    }));
+    const report = await scanInfrastructure(accountId, token);
+    const vector = report.components.find(item => item.key === 'vectorize');
+    expect(vector?.status).toBe('misconfigured');
+    expect(vector?.repairable).toBe(false);
+    expect(calls.some(call => call.method === 'DELETE')).toBe(false);
   });
 
   it('rejects inactive tokens and account mismatch', async () => {
