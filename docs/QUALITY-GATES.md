@@ -21,4 +21,6 @@ Testler; yönetici kurulumu ve oturum güvenliği, kişi ve konuşma alanları, 
 
 Neuron doğrulaması yalnız yüzdeye bakmaz. Kullanılan Neuron, yapılandırılmış mevcut hak/bütçe, kalan, aşım, giriş/çıkış tokenleri, başarılı/başarısız işlem sayıları, UTC dönem başlangıcı ve sıfırlanma zamanı ayrı ayrı doğrulanır. Onaysız fiyat iddiaları gönderilmeden önce sunucu tarafında engellenir.
 
+Para güvenlik testleri; `15.000 TL`, `250,50 EUR`, `100 USD`, `₺12.500`, `$99.90` ve `€ 1.250` biçimlerini kapsar. Cümle ayırıcıları tutar kaydına dahil edilmez ve başka müşterinin özel teklif tutarı mevcut konuşmada onaylı fiyat kabul edilmez.
+
 Test beklentileri hatayı gizlemek için gevşetilmez. Davranış bozuksa kaynak kod düzeltilir ve aynı test yeniden çalıştırılır.
