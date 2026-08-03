@@ -1,0 +1,66 @@
+/* Responsive hardening loaded after the base styles. These rules prevent
+   production-sized Turkish content, identifiers and numeric values from
+   widening cards or overlapping adjacent controls. */
+.app-shell,.main,.content,.page-stack,.panel,.hero,.topbar,.top-actions,.panel-heading,.metrics,.metric,.grid-two,.form-grid,.inline-fields,.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p,.webhook,.wa-layout,.conversation-list,.chat-panel,.customer-panel{min-width:0}
+.topbar>div,.hero>div,.panel-heading>div,.notification>div,.knowledge-list article>div,.catalog-row>span,.key-value>*,.key-list p>*,.webhook>*{min-width:0}
+h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere}
+.metric strong{font-size:clamp(18px,2.2vw,25px);line-height:1.15;word-break:break-word}
+.notification p,.knowledge-list p,.summary-box p,.bubble p,.catalog-row small,.infra-grid p{word-break:break-word}
+.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p{align-items:flex-start}
+.notification select{max-width:100%;min-width:130px}
+.button{white-space:normal;text-align:center;line-height:1.25}
+.webhook code{white-space:normal;word-break:break-all;overflow-wrap:anywhere}
+.chat-header>div{min-width:0}
+.chat-header h3,.chat-header p{overflow-wrap:anywhere}
+.bubble{min-width:0;word-break:break-word}
+.bubble a{word-break:break-all}
+.neuron-source-note,.neuron-quota-row span{overflow-wrap:anywhere}
+.neuron-history th,.neuron-history td{white-space:normal;min-width:90px}
+.toast{overflow-wrap:anywhere}
+
+@media(max-width:840px){
+  .sidebar{min-width:0}
+  .sidebar nav{max-width:100%;scrollbar-width:thin;padding-bottom:5px}
+  .sidebar nav button{flex:0 0 auto}
+  .topbar>div:first-child{width:100%}
+  .top-actions{max-width:100%}
+  .panel-heading.compact .search,.search{max-width:100%;width:100%}
+  .chat-header{gap:10px;flex-wrap:wrap}
+}
+
+@media(max-width:620px){
+  .notification,.knowledge-list article,.catalog-row,.key-value,.key-list p{flex-direction:column;gap:8px}
+  .notification select,.knowledge-list article>.text-button,.catalog-row>b{width:100%}
+  .chat-header{align-items:flex-start;flex-direction:column}
+  .chat-header .pill{max-width:100%}
+  .bar-list>div{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px}
+  .bar-list>div>div{grid-column:1/-1;grid-row:2}
+  .bar-list>div>strong{justify-self:end}
+  .form-actions{width:100%}
+  .form-actions .button{flex:1 1 180px}
+  .toast{left:12px;right:12px;bottom:12px;max-width:none}
+}
+
+@media(max-width:520px){
+  .metrics{grid-template-columns:1fr}
+  .content{padding:12px}
+  .panel{padding:16px}
+  .hero{padding:20px}
+  .topbar{padding:14px 16px}
+  .top-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%}
+  .top-actions .pill{grid-column:1/-1;justify-content:center}
+  .top-actions .button{width:100%}
+  .hero-actions,.hero-actions .button{width:100%}
+  .composer>div{width:100%}
+  .composer>div .button{width:100%}
+  .auth-card{padding:20px;overflow:hidden}
+  .webhook{padding:10px}
+}
+
+@media(max-width:360px){
+  .content{padding:9px}
+  .panel{padding:14px;border-radius:13px}
+  .sidebar{padding-left:8px;padding-right:8px}
+  .topbar h1{font-size:20px}
+  .hero h2{font-size:23px}
+}
