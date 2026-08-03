@@ -4,4 +4,5 @@ export { WhatsAppPage } from './whatsapp';
 export { KnowledgePage } from './knowledgeAi';
 export { AiPage } from './aiPage';
 export { TrainingPage } from './training';
+export { DesktopIndexPanel } from './desktopIndex';
 export { SettingsPage } from './settings';
