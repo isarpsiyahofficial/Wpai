@@ -3,7 +3,7 @@
    widening cards or overlapping adjacent controls. */
 .app-shell,.main,.content,.page-stack,.panel,.hero,.topbar,.top-actions,.panel-heading,.metrics,.metric,.grid-two,.form-grid,.inline-fields,.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p,.webhook,.wa-layout,.conversation-list,.chat-panel,.customer-panel{min-width:0}
 .topbar>div,.hero>div,.panel-heading>div,.notification>div,.knowledge-list article>div,.catalog-row>span,.key-value>*,.key-list p>*,.webhook>*{min-width:0}
-h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere}
+h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
 .metric strong{font-size:clamp(18px,2.2vw,25px);line-height:1.15;word-break:break-word}
 .notification p,.knowledge-list p,.summary-box p,.bubble p,.catalog-row small,.infra-grid p{word-break:break-word}
 .notification,.knowledge-list article,.catalog-row,.key-value,.key-list p{align-items:flex-start}
@@ -17,9 +17,13 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere
 .neuron-source-note,.neuron-quota-row span{overflow-wrap:anywhere}
 .neuron-history th,.neuron-history td{white-space:normal;min-width:90px}
 .toast{overflow-wrap:anywhere}
-.csv-file-input{display:block;width:100%;max-width:100%;min-width:0;overflow:hidden}
-.csv-file-input::file-selector-button{max-width:100%;white-space:normal;margin-right:10px}
+.csv-file-input{display:block;width:100%;max-width:100%;min-width:0;overflow:hidden;color:var(--muted)}
+.csv-file-input::file-selector-button{max-width:100%;white-space:normal;margin-right:10px;padding:9px 12px;border:1px solid var(--border);border-radius:9px;background:#17223a;color:var(--text);font:inherit;cursor:pointer}
 .file-commit{min-width:0;max-width:100%}
+.table-panel{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.table-panel table{min-width:760px}
+.table-panel th,.table-panel td{overflow-wrap:normal;word-break:normal;white-space:normal}
+.table-panel td small,.table-panel td a{overflow-wrap:anywhere;word-break:break-word}
 
 @media(max-width:840px){
   .sidebar{min-width:0}
@@ -42,6 +46,8 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code,td,th{overflow-wrap:anywhere
   .form-actions{width:100%}
   .form-actions .button{flex:1 1 180px}
   .toast{left:12px;right:12px;bottom:12px;max-width:none}
+  .table-panel{position:relative}
+  .table-panel table{min-width:720px}
 }
 
 @media(max-width:520px){
