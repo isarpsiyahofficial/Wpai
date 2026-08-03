@@ -15,4 +15,10 @@ Bu dal aşağıdaki kapıların tamamı yeşil olmadan `main` dalına birleştir
 11. Rust compile kontrolü
 12. Gerçek Tauri NSIS `setup.exe` üretimi
 
+## Zorunlu işlev kapsamı
+
+Testler; yönetici kurulumu ve oturum güvenliği, kişi ve konuşma alanları, CSV içe aktarma, Meta webhook ve bağlantı yaşam döngüsü, mesaj/şablon/dosya gönderimi, R2 konuşma yetkilendirmesi, D1 veri dışa aktarma ve silme, bilgi bankası, hizmet/fiyat kuralları, AI ayarları ve eğitim akışı, müşteri izolasyonu, Queue tüketicileri, insan devri, takip cronları ve Cloudflare güvenli onarımını kapsar.
+
+Neuron doğrulaması yalnız yüzdeye bakmaz. Kullanılan Neuron, yapılandırılmış mevcut hak/bütçe, kalan, aşım, giriş/çıkış tokenleri, başarılı/başarısız işlem sayıları, UTC dönem başlangıcı ve sıfırlanma zamanı ayrı ayrı doğrulanır. Onaysız fiyat iddiaları gönderilmeden önce sunucu tarafında engellenir.
+
 Test beklentileri hatayı gizlemek için gevşetilmez. Davranış bozuksa kaynak kod düzeltilir ve aynı test yeniden çalıştırılır.
