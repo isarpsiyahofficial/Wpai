@@ -24,3 +24,7 @@ Neuron doğrulaması yalnız yüzdeye bakmaz. Kullanılan Neuron, yapılandırı
 Para güvenlik testleri; `15.000 TL`, `250,50 EUR`, `100 USD`, `₺12.500`, `$99.90` ve `€ 1.250` biçimlerini kapsar. Cümle ayırıcıları tutar kaydına dahil edilmez ve başka müşterinin özel teklif tutarı mevcut konuşmada onaylı fiyat kabul edilmez.
 
 Test beklentileri hatayı gizlemek için gevşetilmez. Davranış bozuksa kaynak kod düzeltilir ve aynı test yeniden çalıştırılır.
+
+## Birleştirme ve production kanıtı
+
+Taslak PR yalnız son head commit için Linux kalite kapıları, bağımlılık denetimi, FAISS testleri ve Windows NSIS kurulumu başarıyla tamamlandığında incelemeye hazır duruma getirilebilir. Önceki commitlere ait sonuçlar veya yalnızca kaynak kod incelemesi güncel head commitin test kanıtı sayılmaz. Production dağıtımı ayrıca manuel `production` environment onayı, doğru Cloudflare hesap kimliği ve başarılı sağlık kontrolü gerektirir.
