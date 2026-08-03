@@ -113,7 +113,7 @@ assert.ok(contacts.payload.data.some(item => item.id === contactId));
 
 const knowledge = await json('/api/knowledge', {
   method: 'POST',
-  body: { title: 'Canlı ortam güvenli fiyat kuralı', category: 'Satış', content: 'AI yalnız onaylı fiyat kayıtlarını kullanır ve başka müşterinin teklifini taşımaz.', status: 'approved', usagePermission: 'both' }
+  body: { title: 'Canlı ortam taslak güvenli fiyat kuralı', category: 'Satış', content: 'AI yalnız onaylı fiyat kayıtlarını kullanır ve başka müşterinin teklifini taşımaz.', status: 'draft', usagePermission: 'both' }
 }, 201);
 assert.ok(knowledge.payload.data.id);
 
@@ -199,6 +199,9 @@ assert.ok(files.payload.data.some(item => item.id === attachmentId));
 const exported = await json(`/api/contacts/${contactId}/export`);
 assert.equal(exported.payload.data.contact.id, contactId);
 
+const scheduled = await raw('/cdn-cgi/local/scheduled', { auth: false, csrf: false });
+assert.equal(scheduled.status, 200, 'local scheduled handler must complete');
+
 const notFound = await json('/api/this-route-must-not-exist', {}, 404);
 assert.equal(notFound.payload.error.code, 'NOT_FOUND');
 
@@ -210,6 +213,6 @@ console.log(JSON.stringify({
   checks: [
     'health-and-security-headers', 'auth-and-csrf', 'contacts-and-csv', 'knowledge-and-pricing',
     'meta-verification-and-signed-webhook', 'webhook-idempotency', 'manual-message-idempotency',
-    'r2-scoped-file-roundtrip', 'neuron-safety-limit', 'reports-and-export', 'api-not-found'
+    'r2-scoped-file-roundtrip', 'neuron-safety-limit', 'reports-and-export', 'scheduled-handler', 'api-not-found'
   ]
 }, null, 2));
