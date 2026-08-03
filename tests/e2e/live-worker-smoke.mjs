@@ -46,6 +46,23 @@ async function waitForWorker() {
   throw new Error(`Wrangler worker did not become ready: ${last}`);
 }
 
+async function waitForConversationWithMessage(metaMessageId) {
+  let last = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const conversations = await json('/api/conversations?q=Canlı');
+    last = conversations.payload.data;
+    if (last.length === 1) {
+      const conversationId = last[0].id;
+      const detail = await json(`/api/conversations/${conversationId}`);
+      if (detail.payload.data.messages.some(message => message.meta_message_id === metaMessageId)) {
+        return { conversationId, detail: detail.payload.data };
+      }
+    }
+    await sleep(100);
+  }
+  throw new Error(`Webhook payload was not persisted in time: ${JSON.stringify(last)}`);
+}
+
 const health = await waitForWorker();
 assert.equal(health.ok, true);
 for (const component of ['worker', 'd1', 'r2Binding', 'queuesBinding', 'workersAiBinding', 'vectorizeBinding']) {
@@ -138,15 +155,14 @@ const webhookPayload = JSON.stringify({
 const signature = `sha256=${createHmac('sha256', metaSecret).update(webhookPayload).digest('hex')}`;
 const webhookHeaders = { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature };
 const webhookFirst = await json('/webhooks/whatsapp', { method: 'POST', auth: false, csrf: false, headers: webhookHeaders, body: webhookPayload });
-assert.equal(webhookFirst.payload.ok, true);
+assert.equal(webhookFirst.payload.received, true);
 const webhookDuplicate = await json('/webhooks/whatsapp', { method: 'POST', auth: false, csrf: false, headers: webhookHeaders, body: webhookPayload });
+assert.equal(webhookDuplicate.payload.received, true);
 assert.equal(webhookDuplicate.payload.duplicate, true);
 
-const conversations = await json('/api/conversations?q=Canlı');
-assert.equal(conversations.payload.data.length, 1);
-const conversationId = conversations.payload.data[0].id;
-const detail = await json(`/api/conversations/${conversationId}`);
-assert.equal(detail.payload.data.messages.filter(message => message.meta_message_id === 'wamid.live.like.1').length, 1);
+const persisted = await waitForConversationWithMessage('wamid.live.like.1');
+const conversationId = persisted.conversationId;
+assert.equal(persisted.detail.messages.filter(message => message.meta_message_id === 'wamid.live.like.1').length, 1);
 
 const clientRequestId = '11111111-1111-4111-8111-111111111111';
 const manualFirst = await json('/api/messages/text', {
