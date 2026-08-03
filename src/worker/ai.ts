@@ -293,11 +293,11 @@ async function maybeWarnQuota(env: Env): Promise<void> {
 }
 
 export function extractMonetaryClaims(text: string): MonetaryClaim[] {
-  const pattern = /(?:\b(TL|TRY|USD|EUR|AED)\b|[₺$€])\s*([0-9][0-9\s.,]*)|([0-9][0-9\s.,]*)\s*(?:\b(TL|TRY|USD|EUR|AED)\b|([₺$€]))/giu;
+  const pattern = /((?:\b(?:TL|TRY|USD|EUR|AED)\b)|[₺$€])\s*([0-9][0-9\s.,]*)|([0-9][0-9\s.,]*)\s*((?:\b(?:TL|TRY|USD|EUR|AED)\b)|[₺$€])/giu;
   const claims: MonetaryClaim[] = [];
   for (const match of text.matchAll(pattern)) {
     const rawNumber = match[2] ?? match[3];
-    const rawCurrency = match[1] ?? match[4] ?? match[5];
+    const rawCurrency = match[1] ?? match[4];
     if (!rawNumber || !rawCurrency) continue;
     const amount = parseLocalizedAmount(rawNumber);
     if (Number.isFinite(amount) && amount >= 0) claims.push({ amount, currency: normalizeCurrency(rawCurrency), raw: match[0] });
