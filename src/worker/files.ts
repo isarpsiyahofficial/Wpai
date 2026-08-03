@@ -13,6 +13,7 @@ const allowed = new Map<string, string[]>([
 ]);
 
 function hex(bytes: Uint8Array): string { return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join(''); }
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer { const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); return copy.buffer; }
 
 export function validateFileSignature(mime: string, bytes: Uint8Array): boolean {
   const signatures = allowed.get(mime);
@@ -33,7 +34,7 @@ export async function storeAttachment(
   if (!validateFileSignature(input.mimeType, input.bytes)) throw new Error('FILE_SIGNATURE_REJECTED');
   const max = 25 * 1024 * 1024;
   if (input.bytes.byteLength > max) throw new Error('FILE_TOO_LARGE');
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input.bytes));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', toArrayBuffer(input.bytes)));
   const sha256 = hex(digest);
   const id = crypto.randomUUID();
   const extension = safeExtension(input.originalName);
