@@ -1,11 +1,21 @@
 [[permission]]
 identifier = "allow-wpai-commands"
-description = "Allows the WPAI window to use Windows Credential Manager and the local FAISS sidecar."
+description = "Allows the packaged WPAI window to manage only its opaque desktop session, local preferences and local FAISS cache."
 commands.allow = [
-  "save_cloudflare_token",
-  "load_cloudflare_token",
-  "remove_cloudflare_token",
+  "get_or_create_device_id",
+  "save_desktop_refresh_token",
+  "load_desktop_refresh_token",
+  "remove_desktop_refresh_token",
+  "desktop_preferences",
+  "set_desktop_preferences",
+  "set_windows_autostart",
+  "show_main_window",
+  "quit_application",
   "faiss_health",
+  "faiss_status",
+  "faiss_replace",
   "faiss_upsert",
-  "faiss_search"
+  "faiss_delete",
+  "faiss_search",
+  "faiss_clear"
 ]
