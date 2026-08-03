@@ -1,7 +1,7 @@
 /* Responsive hardening loaded after the base styles. These rules prevent
    production-sized Turkish content, identifiers and numeric values from
    widening cards or overlapping adjacent controls. */
-.app-shell,.main,.content,.page-stack,.panel,.hero,.topbar,.top-actions,.panel-heading,.metrics,.metric,.grid-two,.form-grid,.inline-fields,.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p,.webhook,.wa-layout,.conversation-list,.chat-panel,.customer-panel{min-width:0}
+.app-shell,.main,.content,.page-stack,.panel,.hero,.topbar,.top-actions,.panel-heading,.metrics,.metric,.grid-two,.form-grid,.inline-fields,.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p,.webhook,.wa-layout,.conversation-list,.chat-panel,.customer-panel,.training-layout,.training-page,.training-sessions{min-width:0}
 .topbar>div,.hero>div,.panel-heading>div,.notification>div,.knowledge-list article>div,.catalog-row>span,.key-value>*,.key-list p>*,.webhook>*{min-width:0}
 h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
 .metric strong{font-size:clamp(18px,2.2vw,25px);line-height:1.15;word-break:break-word}
@@ -24,6 +24,21 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
 .table-panel table{min-width:760px}
 .table-panel th,.table-panel td{overflow-wrap:normal;word-break:normal;white-space:normal}
 .table-panel td small,.table-panel td a{overflow-wrap:anywhere;word-break:break-word}
+.brand-image{width:38px;height:38px;border-radius:11px;object-fit:contain;background:#fff;flex:0 0 auto}
+.training-layout{display:grid;grid-template-columns:minmax(260px,330px) minmax(0,1fr);gap:18px;align-items:start}
+.training-sessions{position:sticky;top:108px;max-height:calc(100vh - 130px);display:flex;flex-direction:column;overflow:hidden}
+.training-sessions .conversation-scroll{max-height:520px}
+.training-page pre{white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;background:#0b1220;border:1px solid var(--border);border-radius:10px;padding:12px}
+.training-page .knowledge-list article.selected{border-color:#7657ff;box-shadow:0 0 0 1px rgba(118,87,255,.25)}
+.training-page .knowledge-list article>div:first-child{cursor:pointer;flex:1}
+.training-page .danger-panel.training-clear{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,420px);gap:20px}
+.file-button{display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+
+@media(max-width:1100px){
+  .training-layout{grid-template-columns:1fr}
+  .training-sessions{position:static;max-height:none}
+  .training-sessions .conversation-scroll{max-height:340px}
+}
 
 @media(max-width:840px){
   .sidebar{min-width:0}
@@ -33,6 +48,7 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
   .top-actions{max-width:100%}
   .panel-heading.compact .search,.search{max-width:100%;width:100%}
   .chat-header{gap:10px;flex-wrap:wrap}
+  .training-page .danger-panel.training-clear{grid-template-columns:1fr}
 }
 
 @media(max-width:620px){
@@ -48,6 +64,8 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
   .toast{left:12px;right:12px;bottom:12px;max-width:none}
   .table-panel{position:relative}
   .table-panel table{min-width:720px}
+  .training-page .knowledge-list article .form-actions{justify-content:stretch}
+  .training-page .knowledge-list article .form-actions>*{flex:1 1 160px}
 }
 
 @media(max-width:520px){
@@ -65,6 +83,7 @@ h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
   .auth-card{padding:20px;overflow:hidden}
   .webhook{padding:10px}
   .csv-file-input::file-selector-button{display:block;width:100%;margin:0 0 8px}
+  .training-page input[type=file]{max-width:100%}
 }
 
 @media(max-width:360px){
