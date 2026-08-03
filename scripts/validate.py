@@ -25,14 +25,20 @@ def validate_files() -> None:
         "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx", "src/frontend/pages/knowledgeAi.tsx",
         "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs", "sidecar/faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
-        "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts"
+        "migrations/0005_runtime_hardening.sql", "migrations/0006_ai_usage_and_summary_settings.sql",
+        "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
+        "tests/worker/scoped-files.test.ts", "tests/unit/ai-claims.test.ts"
     ]
     for item in required:
         assert_file(item)
-    forbidden = [ROOT / ".bootstrap", ROOT / ".source-bootstrap"]
+    forbidden = [
+        ROOT / ".bootstrap", ROOT / ".source-bootstrap", ROOT / ".completion-patch-trigger",
+        ROOT / ".ai-state-trigger", ROOT / ".github/workflows/apply-completion-patch.yml",
+        ROOT / ".github/workflows/one-shot-ai-state.yml"
+    ]
     for path in forbidden:
         if path.exists():
-            raise AssertionError(f"Temporary bootstrap artifact must be removed: {path.name}")
+            raise AssertionError(f"Temporary bootstrap or one-shot artifact must be removed: {path.name}")
 
 
 def validate_wrangler() -> None:
@@ -45,7 +51,7 @@ def validate_wrangler() -> None:
     expected_queues = {"wa-inbound-ai", "wa-outbound", "wa-admin-notify", "wa-ai-dlq", "wa-outbound-dlq"}
     producers = {item["queue"] for item in config["queues"]["producers"]}
     assert producers == expected_queues
-    assert config["vars"]["DEFAULT_AI_MODEL"] == "@cf/meta/llama-3.1-8b-instruct-fast"
+    assert config["vars"]["DEFAULT_AI_MODEL"] == "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
     assert config["vars"]["DEFAULT_EMBEDDING_MODEL"] == "@cf/baai/bge-m3"
     serialized = json.dumps(config)
     for forbidden in ("META_ACCESS_TOKEN", "META_APP_SECRET", "ADMIN_BOOTSTRAP_TOKEN", "SESSION_SIGNING_KEY", "DATA_ENCRYPTION_KEY"):
@@ -69,16 +75,20 @@ def validate_migrations() -> None:
         "system_settings", "admins", "admin_sessions", "contacts", "conversations", "messages", "attachments",
         "business_knowledge", "knowledge_chunks", "service_catalog", "pricing_rules", "ai_jobs", "ai_decisions",
         "human_handoffs", "admin_notifications", "follow_up_tasks", "audit_logs", "webhook_events",
-        "integration_credentials", "admin_ai_threads", "admin_ai_messages"
+        "integration_credentials", "admin_ai_threads", "admin_ai_messages", "ai_usage_records"
     }
     missing = required_tables - tables
     if missing:
         raise AssertionError(f"Required D1 tables missing: {sorted(missing)}")
-    defaults = dict(connection.execute("SELECT key,value_json FROM system_settings WHERE key IN ('ai_global_mode','ai_auto_reply_enabled','ai_suggestion_mode','admin_notifications_enabled')"))
+    defaults = dict(connection.execute("SELECT key,value_json FROM system_settings WHERE key IN ('ai_global_mode','ai_auto_reply_enabled','ai_suggestion_mode','admin_notifications_enabled','ai_daily_neuron_limit','ai_summary_message_interval')"))
     assert json.loads(defaults["ai_global_mode"]) == "off"
     assert json.loads(defaults["ai_auto_reply_enabled"]) is False
     assert json.loads(defaults["ai_suggestion_mode"]) is True
     assert json.loads(defaults["admin_notifications_enabled"]) is False
+    assert json.loads(defaults["ai_daily_neuron_limit"]) == 10000
+    assert json.loads(defaults["ai_summary_message_interval"]) == 8
+    webhook_indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='webhook_events'")}
+    assert "ux_webhook_events_payload_hash" in webhook_indexes
     duplicate_indexes = connection.execute("SELECT name,COUNT(*) FROM sqlite_master WHERE type='index' AND name IS NOT NULL GROUP BY name HAVING COUNT(*)>1").fetchall()
     assert not duplicate_indexes
     connection.close()
@@ -95,6 +105,10 @@ def validate_product_scope() -> None:
     for label in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "WhatsApp Business API", "Parola Değiştir"):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
+    ai_page = (ROOT / "src/frontend/pages/knowledgeAi.tsx").read_text("utf-8")
+    for label in ("Kullanılan", "Mevcut hak / bütçe", "Kalan", "Aşım", "Giriş tokeni", "Çıkış tokeni"):
+        if label not in ai_page:
+            raise AssertionError(f"Neuron usage field missing: {label}")
 
 
 if __name__ == "__main__":
@@ -102,4 +116,4 @@ if __name__ == "__main__":
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: files, Cloudflare manifest, D1 schema, safe defaults and product scope are consistent.")
+    print("Static validation passed: files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
