@@ -142,7 +142,7 @@ extendedApiRoutes.post('/contacts/import-csv', zValidator('json', CsvImportSchem
     if (results.some(item => !item.success)) throw new Error('CSV_IMPORT_FAILED');
     await audit(c.env.DB, c.get('adminId')!, 'contacts.csv_imported', 'contact', null, { imported: eligible.length }, c.get('requestId'));
   }
-  return ok(c, { totalRows: Math.max(0, rows.length - 1), validUnique: candidates.size, invalid, duplicateInFile, alreadyRegistered: existing.size, optOutExcluded: optedOut.size, eligible: eligible.length, committed: input.commit ? eligible.length : 0 });
+  return ok(c, { totalRows: Math.max(0, rows.length - 1), validUnique: candidates.size, invalid, duplicateInFile, alreadyRegistered: [...existing].filter(phone => !optedOut.has(phone)).length, optOutExcluded: optedOut.size, eligible: eligible.length, committed: input.commit ? eligible.length : 0 });
 });
 
 extendedApiRoutes.get('/contacts/:id/export', async c => {

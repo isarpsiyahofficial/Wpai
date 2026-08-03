@@ -25,7 +25,7 @@ webhookRoutes.post('/whatsapp', async c => {
   const payloadHash = await digestHex(raw);
   const eventId = crypto.randomUUID();
   try {
-    await run(c.env.DB, `INSERT INTO webhook_events (id, payload_hash, event_type, status, received_at) VALUES (?, ?, 'whatsapp', 'received', ?)`, eventId, payloadHash, nowIso());
+    await run(c.env.DB, `INSERT INTO webhook_events (id, provider_event_id, payload_hash, event_type, status, received_at) VALUES (?, ?, ?, 'whatsapp', 'received', ?)`, eventId, payloadHash, payloadHash, nowIso());
   } catch { return c.json({ received: true, duplicate: true }); }
   let payload: WhatsAppWebhook;
   try { payload = JSON.parse(new TextDecoder().decode(raw)) as WhatsAppWebhook; }
