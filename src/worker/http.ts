@@ -49,26 +49,34 @@ export const requestContext: MiddlewareHandler<AppContext> = async (c, next) => 
 };
 
 export const requireAuth: MiddlewareHandler<AppContext> = async (c, next) => {
-  const token = parseCookies(c.req.header('Cookie')).wpai_session;
+  const authorization = c.req.header('Authorization') ?? '';
+  const bearerMatch = authorization.match(/^Bearer\s+([^\s]+)$/i);
+  const bearerToken = bearerMatch?.[1];
+  const cookieToken = parseCookies(c.req.header('Cookie')).wpai_session;
+  const token = bearerToken ?? cookieToken;
   if (!token) return fail(c, 'AUTH_REQUIRED', 'Oturum açmanız gerekiyor.', 401);
+  if (token.length < 32 || token.length > 4096) return fail(c, 'SESSION_INVALID', 'Oturum geçersiz veya süresi dolmuş.', 401);
+
   const tokenHash = await sha256(token);
   const row = await first<SessionRow>(
     c.env.DB,
-    `SELECT s.id AS session_id, s.admin_id, s.csrf_token, a.role, a.email, a.name
-       FROM admin_sessions s JOIN admins a ON a.id = s.admin_id
-      WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
-        AND a.status = 'active' AND a.deleted_at IS NULL LIMIT 1`,
+    `SELECT s.id AS session_id,s.admin_id,s.csrf_token,a.role,a.email,a.name
+       FROM admin_sessions s JOIN admins a ON a.id=s.admin_id
+      WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?
+        AND a.status='active' AND a.deleted_at IS NULL LIMIT 1`,
     tokenHash, nowIso()
   );
   if (!row) return fail(c, 'SESSION_INVALID', 'Oturum geçersiz veya süresi dolmuş.', 401);
   c.set('adminId', row.admin_id);
   c.set('sessionId', row.session_id);
   c.set('csrfToken', row.csrf_token);
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method)) {
+
+  const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method);
+  if (isMutation && !bearerToken) {
     const csrf = c.req.header('X-CSRF-Token');
     if (!csrf || csrf !== row.csrf_token) return fail(c, 'CSRF_INVALID', 'Güvenlik doğrulaması başarısız.', 403);
   }
-  c.executionCtx.waitUntil(run(c.env.DB, 'UPDATE admin_sessions SET last_seen_at = ? WHERE id = ?', nowIso(), row.session_id));
+  c.executionCtx.waitUntil(run(c.env.DB, 'UPDATE admin_sessions SET last_seen_at=? WHERE id=?', nowIso(), row.session_id));
   await next();
 };
 
