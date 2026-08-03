@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { authRoutes } from './auth';
 import { apiRoutes } from './api';
+import { extendedApiRoutes } from './extendedApi';
 import { webhookRoutes } from './webhook';
 import { handleQueue } from './queues';
 import { first, nowIso, run, setting } from './db';
@@ -37,6 +38,7 @@ app.get('/health', async c => {
 
 app.route('/api/auth', authRoutes);
 app.route('/api', apiRoutes);
+app.route('/api', extendedApiRoutes);
 app.route('/webhooks', webhookRoutes);
 
 app.notFound(async c => c.env.ASSETS.fetch(c.req.raw));
