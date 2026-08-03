@@ -1,21 +1,29 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  root: '.',
   build: {
     outDir: 'dist/web',
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: { input: 'index.html' }
   },
   resolve: {
     alias: {
-      '@': new URL('./src', import.meta.url).pathname,
-      '@shared': new URL('./src/shared', import.meta.url).pathname,
-      '@frontend': new URL('./src/frontend', import.meta.url).pathname
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
+      '@frontend': fileURLToPath(new URL('./src/frontend', import.meta.url))
     }
   },
-  server: { port: 5173, proxy: { '/api': 'http://localhost:8787', '/health': 'http://localhost:8787' } }
+  server: {
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      '/api': 'http://127.0.0.1:8787',
+      '/health': 'http://127.0.0.1:8787',
+      '/webhooks': 'http://127.0.0.1:8787'
+    }
+  }
 });
