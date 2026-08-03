@@ -197,7 +197,7 @@ jobs:
           git commit -m "fix: resolve strict source verification errors"
           git push origin HEAD:agent/wpai-production-rebuild
 
-  installer:
+  installer-current:
     name: Build and verify NSIS setup.exe
     runs-on: windows-latest
     timeout-minutes: 50
