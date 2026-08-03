@@ -70,8 +70,8 @@ jobs:
         with:
           name: WPAI-Responsive-Evidence-${{ github.sha }}
           path: |
-            test-results
-            playwright-report
+            tests/e2e/test-results
+            tests/e2e/playwright-report
             vite-preview.log
           if-no-files-found: warn
           retention-days: 30
