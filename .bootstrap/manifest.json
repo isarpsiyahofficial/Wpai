@@ -1,0 +1,7 @@
+{
+  "archive": "wpai-source.tar.gz",
+  "sha256": "c2129573ab803d620f161ae6892cc88392f3d0c6af9d4312ff9fe6e670db064e",
+  "parts": 9,
+  "target_branch": "agent/wpai-production-rebuild",
+  "created_at": "2026-08-03T05:22:00Z"
+}
