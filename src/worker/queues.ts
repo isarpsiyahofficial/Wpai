@@ -1,6 +1,6 @@
 import type { AdminNotifyJob, DeadLetterJob, Env, InboundAiJob, OutboundJob } from './types';
 import { buildAiContext, decide, finalSendGate } from './ai';
-import { first, nowIso, run, setting } from './db';
+import { all, first, nowIso, run, setting, type D1Value } from './db';
 import { getMetaCredentials, sendMetaMessage } from './meta';
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
@@ -33,8 +33,14 @@ async function consumeInbound(batch: MessageBatch<InboundAiJob>, env: Env): Prom
       for (const note of decision.note_updates) {
         await run(env.DB, `INSERT INTO customer_notes (id, contact_id, conversation_id, source, note_text, created_at, updated_at) VALUES (?, ?, ?, 'ai', ?, ?, ?)`, crypto.randomUUID(), job.contactId, job.conversationId, note.text, nowIso(), nowIso());
       }
+      await applyRequirementUpdates(env, job, decision.requirement_updates);
+      await maybeRefreshSummary(env, job, decision.needs_human || decision.action === 'handoff');
       if (decision.needs_human || decision.action === 'handoff') await createHandoff(env, job, decisionId, decision.intent, source.text_content);
       const gate = await finalSendGate(env, job, decision);
+      if (!gate.allowed && gate.reason === 'unapproved_price_claim') {
+        await run(env.DB, 'UPDATE ai_decisions SET blocked_reason=? WHERE id=?', gate.reason, decisionId);
+        await createHandoff(env, job, decisionId, 'unapproved_price_claim', 'AI doğrulanmamış bir fiyat veya para tutarı üretmeye çalıştı; otomatik mesaj engellendi.');
+      }
       if (gate.allowed && decision.reply.trim()) {
         const messageId = crypto.randomUUID();
         const now = nowIso();
@@ -139,7 +145,6 @@ async function consumeAdminNotify(batch: MessageBatch<AdminNotifyJob>, env: Env)
       if (!credentials?.adminWhatsAppPhone) { message.ack(); continue; }
       const notification = await first<{ title: string; body: string; whatsapp_status: string | null }>(env.DB, 'SELECT title, body, whatsapp_status FROM admin_notifications WHERE id=?', job.notificationId);
       if (!notification || notification.whatsapp_status === 'sent') { message.ack(); continue; }
-      // Outside the 24h window a Meta-approved utility template is required. Keep panel notification if template is unavailable.
       const template = await first<{ meta_name: string; language_code: string }>(env.DB, "SELECT meta_name, language_code FROM message_templates WHERE meta_name='admin_alert_v1' AND status='APPROVED' LIMIT 1");
       if (!template) {
         await run(env.DB, "UPDATE admin_notifications SET whatsapp_status='template_required', updated_at=? WHERE id=?", nowIso(), job.notificationId);
@@ -159,6 +164,78 @@ async function consumeDeadLetters(batch: MessageBatch<DeadLetterJob>, env: Env):
     await run(env.DB, `INSERT INTO admin_notifications (id, type, priority, status, title, body, created_at, updated_at) VALUES (?, 'system_error', 'high', 'unread', 'Kuyruk işi başarısız', ?, ?, ?)`, crypto.randomUUID(), `${message.body.sourceQueue}: ${message.body.errorCode}`, nowIso(), nowIso()).catch(() => undefined);
     message.ack();
   }
+}
+
+const REQUIREMENT_COLUMNS: Record<string, 'text' | 'number' | 'boolean' | 'json'> = {
+  sector: 'text', website_type: 'text', requested_pages: 'json', admin_panel_required: 'boolean',
+  catalog_required: 'boolean', ecommerce_required: 'boolean', multilanguage_required: 'boolean',
+  domain_status: 'text', hosting_status: 'text', design_preferences: 'text', reference_websites: 'json',
+  budget_min: 'number', budget_max: 'number', currency_code: 'text', delivery_expectation: 'text',
+  quoted_price: 'number', discount_amount: 'number', payment_expectation: 'text', next_action: 'text', lead_stage: 'text'
+};
+const REQUIREMENT_DB_COLUMNS: Record<string, string> = {
+  requested_pages: 'requested_pages_json', reference_websites: 'reference_websites_json'
+};
+
+export async function applyRequirementUpdates(env: Env, job: InboundAiJob, updates: Record<string, unknown>): Promise<void> {
+  if (!updates || typeof updates !== 'object') return;
+  const assignments: string[] = [];
+  const values: D1Value[] = [];
+  for (const [key, raw] of Object.entries(updates)) {
+    const kind = REQUIREMENT_COLUMNS[key];
+    if (!kind || raw === null || raw === undefined || raw === '') continue;
+    let value: D1Value;
+    if (kind === 'text') {
+      if (typeof raw !== 'string') continue;
+      value = raw.trim().slice(0, 4000);
+      if (!value) continue;
+    } else if (kind === 'number') {
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) continue;
+      value = raw;
+    } else if (kind === 'boolean') {
+      if (typeof raw !== 'boolean') continue;
+      value = raw ? 1 : 0;
+    } else {
+      if (!Array.isArray(raw) || raw.length > 100) continue;
+      value = JSON.stringify(raw.filter(item => typeof item === 'string').map(item => item.slice(0, 500)));
+    }
+    assignments.push(`${REQUIREMENT_DB_COLUMNS[key] ?? key}=?`);
+    values.push(value);
+  }
+  if (!assignments.length) return;
+  const timestamp = nowIso();
+  await run(env.DB,
+    `INSERT OR IGNORE INTO customer_requirements (id,contact_id,conversation_id,updated_at) VALUES (?,?,?,?)`,
+    crypto.randomUUID(), job.contactId, job.conversationId, timestamp);
+  await run(env.DB,
+    `UPDATE customer_requirements SET ${assignments.join(',')}, updated_at=? WHERE conversation_id=? AND contact_id=?`,
+    ...values, timestamp, job.conversationId, job.contactId);
+}
+
+export async function maybeRefreshSummary(env: Env, job: InboundAiJob, force = false): Promise<void> {
+  const total = await first<{ count: number }>(env.DB,
+    'SELECT COUNT(*) AS count FROM messages WHERE conversation_id=? AND contact_id=?', job.conversationId, job.contactId);
+  const interval = Math.max(4, Math.min(50, Number(await setting(env.DB, 'ai_summary_message_interval') ?? '8')));
+  const latest = await first<{ version: number; through_message_id: string | null }>(env.DB,
+    'SELECT version,through_message_id FROM conversation_summaries WHERE conversation_id=? ORDER BY version DESC LIMIT 1', job.conversationId);
+  const expectedVersion = Math.floor((total?.count ?? 0) / interval);
+  if (!force && expectedVersion <= (latest?.version ?? 0)) return;
+  if (latest?.through_message_id === job.sourceMessageId) return;
+  const contact = await first<{ display_name: string }>(env.DB, 'SELECT display_name FROM contacts WHERE id=?', job.contactId);
+  const requirements = await first<Record<string, unknown>>(env.DB,
+    `SELECT sector,website_type,budget_min,budget_max,currency_code,delivery_expectation,next_action,lead_stage
+       FROM customer_requirements WHERE conversation_id=? AND contact_id=?`, job.conversationId, job.contactId);
+  const recent = await all<{ direction: string; text_content: string | null }>(env.DB,
+    `SELECT direction,text_content FROM messages WHERE conversation_id=? AND contact_id=? AND text_content IS NOT NULL
+      ORDER BY created_at DESC LIMIT 6`, job.conversationId, job.contactId);
+  const facts = Object.entries(requirements ?? {}).filter(([, value]) => value !== null && value !== '').map(([key, value]) => `${key}: ${String(value)}`);
+  const excerpts = recent.reverse().map(item => `${item.direction === 'inbound' ? 'Müşteri' : 'İşletme'}: ${(item.text_content ?? '').slice(0, 240)}`);
+  const summary = [`Müşteri: ${contact?.display_name ?? 'Bilinmiyor'}`, ...facts, ...excerpts].join('\n').slice(0, 4000);
+  await run(env.DB,
+    `INSERT INTO conversation_summaries (id,conversation_id,version,summary_text,facts_json,through_message_id,created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    crypto.randomUUID(), job.conversationId, (latest?.version ?? 0) + 1, summary,
+    JSON.stringify(requirements ?? {}), job.sourceMessageId, nowIso());
 }
 
 function safeErrorCode(error: unknown): string {
