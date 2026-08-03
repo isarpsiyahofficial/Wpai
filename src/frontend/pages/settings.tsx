@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { api, formValue, jsonBody } from '../api';
+import { api, apiObjectUrl, formValue, jsonBody, publicRawJson } from '../api';
 import { desktop } from '../desktop';
 import type { Health, Notify } from '../types';
 import { Empty, formatDate } from './core';
@@ -13,12 +13,14 @@ interface DeadLetter { id: string; source_queue: string; payload_json: string; e
 interface AppSettings { aiModel?: string; embeddingModel?: string; timezone?: string }
 
 const ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
+const PRODUCTION_ORIGIN = 'https://wa-ai-panel.wa-ai-panel.workers.dev';
 
 export function SettingsPage({ notify, health }: { notify: Notify; health: Health | null }) {
   const isDesktop = desktop.available();
   const [meta, setMeta] = useState<MetaStatus | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [branding, setBranding] = useState<Branding | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [replies, setReplies] = useState<CannedReply[]>([]);
   const [deadLetters, setDeadLetters] = useState<DeadLetter[]>([]);
   const [token, setToken] = useState('');
@@ -43,6 +45,28 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
   }, [notify]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let disposed = false;
+    let objectUrl: string | null = null;
+    if (!branding?.logo_key) {
+      setLogoUrl(null);
+      return;
+    }
+    if (!isDesktop) {
+      setLogoUrl('/api/branding/logo');
+      return;
+    }
+    void apiObjectUrl('/api/branding/logo').then(value => {
+      objectUrl = value;
+      if (!disposed) setLogoUrl(value);
+    }).catch(() => {
+      if (!disposed) setLogoUrl(null);
+    });
+    return () => {
+      disposed = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [branding?.logo_key, isDesktop]);
 
   async function saveMeta(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -213,19 +237,18 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
   async function runDeepHealth() {
     setBusy(true);
     try {
-      const response = await fetch('/health?deep=1', { credentials: 'include' });
-      const value = await response.json() as Health;
+      const value = await publicRawJson<Health>('/health?deep=1');
       setDeepHealth(value);
       notify(value.ok ? 'D1, R2 ve Vectorize operasyonel sağlık kontrolü geçti.' : 'Derin sağlık kontrolünde hata bulundu.', value.ok ? 'success' : 'error');
     } catch { notify('Derin sağlık kontrolü çalıştırılamadı.', 'error'); }
     finally { setBusy(false); }
   }
 
-  const webhook = `${window.location.origin}/webhooks/whatsapp`;
+  const webhook = `${isDesktop ? PRODUCTION_ORIGIN : window.location.origin}/webhooks/whatsapp`;
   return <div className="page-stack">
     <section className="grid-two">
       <div className="panel"><h3>Merkezi Marka Ayarları</h3>{branding && <form className="form-stack" key={branding.updated_at} onSubmit={saveBranding}><label>Uygulama adı<input name="appName" defaultValue={branding.app_name} required /></label><label>Firma adı<input name="companyName" defaultValue={branding.company_name} /></label><label>Kısa açıklama<textarea name="description" rows={3} defaultValue={branding.short_description} /></label><div className="inline-fields"><label>Ana renk<input name="primaryColor" type="color" defaultValue={branding.primary_color} /></label><label>İkinci renk<input name="secondaryColor" type="color" defaultValue={branding.secondary_color} /></label></div><button className="button primary">Markayı Kaydet</button></form>}</div>
-      <div className="panel"><h3>Logo</h3><p>Logo R2’nin özel alanında saklanır; public bucket açılmaz.</p>{branding?.logo_key && <img className="settings-logo-preview" src="/api/branding/logo" alt="Mevcut logo" />}<form className="form-stack" onSubmit={uploadLogo}><label>Yeni logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp" required /></label><button className="button secondary">Logoyu Yükle</button></form></div>
+      <div className="panel"><h3>Logo</h3><p>Logo R2’nin özel alanında saklanır; public bucket açılmaz.</p>{logoUrl && <img className="settings-logo-preview" src={logoUrl} alt="Mevcut logo" />}<form className="form-stack" onSubmit={uploadLogo}><label>Yeni logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp" required /></label><button className="button secondary">Logoyu Yükle</button></form></div>
     </section>
 
     <section className="panel"><div className="panel-heading"><div><h3>Cloudflare Kurulum ve Onarım</h3><p>Yalnız sabit hesaptaki wa-ai-knowledge-prod ve wa-knowledge-index eksikse oluşturabilir. D1, R2, Worker, mevcut Queue, DNS veya plan değiştirilmez.</p></div><span className={`pill ${infra?.overall === 'ready' ? 'ready' : 'warn'}`}>{infra?.overall === 'ready' ? 'Hazır' : infra ? 'İnceleme gerekiyor' : 'Taranmadı'}</span></div>
