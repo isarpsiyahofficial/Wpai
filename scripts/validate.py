@@ -9,10 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_jsonc(path: Path) -> dict:
-    text = path.read_text("utf-8")
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    text = re.sub(r"(^|\s)//.*", r"\1", text)
-    return json.loads(text)
+    # WPAI keeps wrangler.jsonc as strict JSON so URLs and regex-like values are never
+    # corrupted by a naive comment stripper. Wrangler still accepts the .jsonc suffix.
+    return json.loads(path.read_text("utf-8"))
 
 
 def assert_file(path: str) -> None:
