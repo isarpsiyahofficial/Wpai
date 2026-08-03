@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, formValue, jsonBody, setCsrfToken } from './api';
 import type { Admin, Health, Notify, PageId } from './types';
 import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, WhatsAppPage } from './pages';
@@ -47,7 +47,10 @@ export function App() {
   useEffect(() => { void boot(); }, [boot]);
   useEffect(() => {
     if (auth.phase !== 'ready') return;
-    const refresh = () => void fetch('/health').then(response => response.json()).then(setHealth).catch(() => setHealth(null));
+    const refresh = () => void fetch('/health')
+      .then(response => response.json() as Promise<Health>)
+      .then(value => setHealth(value))
+      .catch(() => setHealth(null));
     refresh(); const timer = window.setInterval(refresh, 30_000); return () => window.clearInterval(timer);
   }, [auth.phase]);
 
