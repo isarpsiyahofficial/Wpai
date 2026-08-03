@@ -13,6 +13,12 @@ function base64ToBytes(value: string): Uint8Array {
   return Uint8Array.from(binary, c => c.charCodeAt(0));
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export function randomToken(bytes = 32): string {
   const data = new Uint8Array(bytes);
   crypto.getRandomValues(data);
@@ -20,16 +26,16 @@ export function randomToken(bytes = 32): string {
 }
 
 export async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
+  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(encoder.encode(value)));
   return bytesToBase64(new Uint8Array(digest));
 }
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = new Uint8Array(16);
   crypto.getRandomValues(salt);
-  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const key = await crypto.subtle.importKey('raw', toArrayBuffer(encoder.encode(password)), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations: PASSWORD_ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations: PASSWORD_ITERATIONS, hash: 'SHA-256' },
     key,
     256
   );
@@ -43,9 +49,9 @@ export async function verifyPassword(password: string, encoded: string): Promise
   if (!Number.isInteger(iterations) || iterations < 100_000 || iterations > 2_000_000) return false;
   const salt = base64ToBytes(saltText);
   const expected = base64ToBytes(hashText);
-  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const key = await crypto.subtle.importKey('raw', toArrayBuffer(encoder.encode(password)), 'PBKDF2', false, ['deriveBits']);
   const bits = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, expected.byteLength * 8
+    { name: 'PBKDF2', salt: toArrayBuffer(salt), iterations, hash: 'SHA-256' }, key, expected.byteLength * 8
   ));
   if (bits.byteLength !== expected.byteLength) return false;
   let diff = 0;
@@ -57,16 +63,20 @@ async function importEncryptionKey(secret: string): Promise<CryptoKey> {
   let keyBytes: Uint8Array;
   try { keyBytes = base64ToBytes(secret); } catch { keyBytes = encoder.encode(secret); }
   if (keyBytes.byteLength !== 32) {
-    keyBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', keyBytes));
+    keyBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', toArrayBuffer(keyBytes)));
   }
-  return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return crypto.subtle.importKey('raw', toArrayBuffer(keyBytes), 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
 export async function encryptSecret(plaintext: string, secret: string): Promise<string> {
   const iv = new Uint8Array(12);
   crypto.getRandomValues(iv);
   const key = await importEncryptionKey(secret);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(plaintext)));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    toArrayBuffer(encoder.encode(plaintext))
+  ));
   return `v1.${bytesToBase64(iv)}.${bytesToBase64(ciphertext)}`;
 }
 
@@ -75,7 +85,9 @@ export async function decryptSecret(encoded: string, secret: string): Promise<st
   if (version !== 'v1' || !ivText || !cipherText) throw new Error('INVALID_ENCRYPTED_SECRET');
   const key = await importEncryptionKey(secret);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBytes(ivText) }, key, base64ToBytes(cipherText)
+    { name: 'AES-GCM', iv: toArrayBuffer(base64ToBytes(ivText)) },
+    key,
+    toArrayBuffer(base64ToBytes(cipherText))
   );
   return decoder.decode(plaintext);
 }
