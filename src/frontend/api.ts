@@ -138,11 +138,23 @@ async function webFetch(path: string, init: RequestInit): Promise<Response> {
   return fetch(path, { ...init, headers, credentials: 'include' });
 }
 
+async function unauthenticatedFetch(path: string, init: RequestInit): Promise<Response> {
+  if (desktop.available()) {
+    return fetch(apiUrl(path), { ...init, credentials: 'omit', cache: init.cache ?? 'no-store' });
+  }
+  return webFetch(path, init);
+}
+
 export async function publicApi<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = desktop.available()
-    ? await fetch(apiUrl(path), { ...init, credentials: 'omit', cache: init.cache ?? 'no-store' })
-    : await webFetch(path, init);
-  return parseJson<T>(response);
+  return parseJson<T>(await unauthenticatedFetch(path, init));
+}
+
+export async function publicRawJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await unauthenticatedFetch(path, init);
+  if (!response.ok) throw new Error(`İstek başarısız (${response.status}).`);
+  const type = response.headers.get('content-type') ?? '';
+  if (!type.includes('application/json')) throw new Error('Beklenen JSON cevabı alınamadı.');
+  return response.json() as Promise<T>;
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
