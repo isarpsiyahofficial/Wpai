@@ -9,6 +9,14 @@ export const MessageTypeSchema = z.enum([
 ]);
 export type MessageType = z.infer<typeof MessageTypeSchema>;
 
+const AiRequirementValueSchema = z.union([
+  z.string().max(4000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string().max(500)).max(100)
+]);
+
 export const AiDecisionSchema = z.object({
   action: z.enum(['reply', 'clarify', 'handoff', 'no_reply', 'wait', 'blocked']),
   intent: z.string().min(1).max(80),
@@ -17,7 +25,7 @@ export const AiDecisionSchema = z.object({
   needs_research: z.boolean(),
   should_notify_admin: z.boolean(),
   note_updates: z.array(z.object({ text: z.string().min(1).max(2000) })).max(10),
-  requirement_updates: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  requirement_updates: z.record(z.string(), AiRequirementValueSchema),
   reply: z.string().max(4000)
 });
 export type AiDecision = z.infer<typeof AiDecisionSchema>;
