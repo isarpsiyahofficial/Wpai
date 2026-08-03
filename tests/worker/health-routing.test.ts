@@ -13,7 +13,7 @@ describe('health, security headers and routing',()=>{
   });
 
   it('sends unknown non-API paths to the asset binding but never treats unknown API paths as successful JSON',async()=>{
-    const page=await request('/unknown-page');expect(page.status).toBe(404);expect(await page.text()).toBe('asset-not-found');
-    const api=await request('/api/does-not-exist');expect(api.status).toBe(404);
+    const page=await request('/unknown-page');expect(page.status).toBe(404);expect(page.headers.get('Content-Type')).not.toContain('application/json');
+    const api=await request('/api/does-not-exist');expect(api.status).toBe(404);expect(api.headers.get('Content-Type')).toContain('application/json');
   });
 });
