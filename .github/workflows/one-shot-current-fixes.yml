@@ -99,3 +99,5 @@ jobs:
           git add -A
           git commit -m "fix: resolve training and operations type errors"
           git push origin HEAD:agent/wpai-production-rebuild
+
+# Triggered after the training interface and operations API were mounted.
