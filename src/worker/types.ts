@@ -1,3 +1,13 @@
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      SESSION_SIGNING_KEY: string;
+      DATA_ENCRYPTION_KEY: string;
+      ADMIN_BOOTSTRAP_TOKEN?: string;
+    }
+  }
+}
+
 export interface Env {
   DB: D1Database;
   FILES: R2Bucket;
@@ -65,3 +75,5 @@ export type AppContext = {
   Bindings: Env;
   Variables: RequestVariables;
 };
+
+export {};
