@@ -60,7 +60,7 @@ jobs:
         run: npm run typecheck
       - name: Rust compile check
         shell: pwsh
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
+        run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Build NSIS installer
         shell: pwsh
         run: npm run desktop:build
