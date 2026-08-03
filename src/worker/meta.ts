@@ -8,7 +8,7 @@ export type MetaCredentials = {
   phoneNumberId: string;
   businessAccountId: string;
   verifyToken: string;
-  adminWhatsAppPhone?: string;
+  adminWhatsAppPhone?: string | undefined;
 };
 
 export async function saveMetaCredentials(env: Env, credentials: MetaCredentials, adminId: string): Promise<void> {
