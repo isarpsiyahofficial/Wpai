@@ -41,8 +41,29 @@ jobs:
         run: npm install --no-save --package-lock=false --no-audit --no-fund @playwright/test@1.55.0
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Run populated responsive and administrator scenarios
-        run: npx playwright test --config=tests/e2e/playwright.config.mjs
+      - name: Build production web assets
+        run: npm run build
+      - name: Start preview, verify port and run populated browser scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx vite preview --host 127.0.0.1 --port 4173 --strictPort > vite-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4173/ > /tmp/wpai-preview.html; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            cat vite-preview.log >&2
+            exit 1
+          fi
+          grep -q '<div id="root"></div>' /tmp/wpai-preview.html
+          npx playwright test --config=tests/e2e/playwright.config.mjs
       - name: Upload responsive screenshots and traces
         if: always()
         uses: actions/upload-artifact@v4
@@ -51,6 +72,7 @@ jobs:
           path: |
             test-results
             playwright-report
+            vite-preview.log
           if-no-files-found: warn
           retention-days: 30
 
