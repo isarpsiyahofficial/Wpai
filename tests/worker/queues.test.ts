@@ -16,7 +16,7 @@ async function seedConversation(options:{aiMode?:string;human?:number;phone?:str
   const contactId=crypto.randomUUID(),conversationId=crypto.randomUUID();const now=new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("INSERT INTO contacts (id,phone_e164,display_name,country_code,source,status,created_at,updated_at) VALUES (?,?,?,'TR','test','lead',?,?)").bind(contactId,options.phone??'+905326660001','Queue Test',now,now),
-    env.DB.prepare("INSERT INTO conversations (id,contact_id,status,ai_mode,human_takeover,last_inbound_at,last_message_at,created_at,updated_at) VALUES (?,?,'open',?,?,?,?,?,?,?)").bind(conversationId,contactId,options.aiMode??'suggestion',options.human??0,now,now,now,now)
+    env.DB.prepare("INSERT INTO conversations (id,contact_id,status,ai_mode,human_takeover,last_inbound_at,last_message_at,created_at,updated_at) VALUES (?,?,'open',?,?,?,?,?,?)").bind(conversationId,contactId,options.aiMode??'suggestion',options.human??0,now,now,now,now)
   ]);
   return{contactId,conversationId,now};
 }
