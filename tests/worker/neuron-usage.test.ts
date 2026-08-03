@@ -21,7 +21,7 @@ async function seedConversation(phone = '+905329999991') {
 }
 
 describe('exact Neuron usage accounting', () => {
-  it('returns used, entitlement, remaining, overage, percentage, tokens and request counts', async () => {
+  it('separates estimates, official allocation, safety limit, history and breakdowns', async () => {
     const auth = await setupAdmin();
     const today = new Date().toISOString();
     await env.DB.batch([
@@ -35,23 +35,47 @@ describe('exact Neuron usage accounting', () => {
     const body = await json<any>(response);
     expect(body.data).toMatchObject({
       usedNeurons: 3.75,
+      estimatedUsedNeurons: 3.75,
+      providerReportedUsedNeurons: null,
+      effectiveUsedNeurons: 3.75,
       entitlementNeurons: 10,
+      configuredSafetyLimitNeurons: 10,
       freeAllocationNeurons: 10000,
+      officialDailyAllocationNeurons: 10000,
+      officialAllocationRemainingEstimate: 9996.25,
       remainingNeurons: 6.25,
+      safetyLimitRemainingNeurons: 6.25,
       overageNeurons: 0,
+      safetyLimitOverageNeurons: 0,
       usagePercent: 37.5,
+      safetyLimitUsagePercent: 37.5,
       inputTokens: 150,
       outputTokens: 30,
       requests: 2,
       successfulRequests: 1,
       failedRequests: 1,
-      source: 'recorded_workers_ai_usage'
+      source: 'recorded_workers_ai_usage',
+      usageSource: 'estimated_from_recorded_tokens',
+      providerUsageAvailable: false
     });
     expect(body.data.periodStart).toMatch(/T00:00:00\.000Z$/);
     expect(Date.parse(body.data.resetAt)).toBeGreaterThan(Date.parse(body.data.periodStart));
+    expect(body.data.lastUpdatedAt).toBe(today);
+    expect(body.data.byModel).toEqual([expect.objectContaining({ key: 'model-a', estimatedNeurons: 3.75, requests: 2 })]);
+    expect(body.data.byOperation).toEqual([expect.objectContaining({ key: 'chat', estimatedNeurons: 3.75, requests: 2 })]);
+    expect(body.data.dailyHistory).toHaveLength(30);
+    expect(body.data.dailyHistory.at(-1)).toEqual(expect.objectContaining({ date: today.slice(0, 10), estimatedNeurons: 3.75, requests: 2 }));
+    expect(body.data.quota).toMatchObject({
+      warningThresholdPercent: 70,
+      criticalThresholdPercent: 90,
+      stopThresholdPercent: 100,
+      level: 'normal',
+      configuredFallbackMode: 'suggestion',
+      safeModeApplied: false
+    });
   });
 
-  it('updates the configured entitlement only with authentication and CSRF, and audits the change', async () => {
+  it('updates the configured safety limit only with authentication and CSRF, and audits the meaning', async () => {
     const auth = await setupAdmin();
     const unauthenticated = await request('/api/ai/usage-limit', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entitlementNeurons: 400000 })
@@ -65,14 +89,14 @@ describe('exact Neuron usage accounting', () => {
       method: 'PUT', headers: authHeaders(auth), body: JSON.stringify({ entitlementNeurons: 400000 })
     });
     expect(updated.status).toBe(200);
-    expect((await json<any>(updated)).data.entitlementNeurons).toBe(400000);
+    expect((await json<any>(updated)).data.configuredSafetyLimitNeurons).toBe(400000);
     const setting = await env.DB.prepare("SELECT value_json FROM system_settings WHERE key='ai_daily_neuron_limit'").first<{ value_json:string }>();
     expect(setting?.value_json).toBe('400000');
     const audit = await env.DB.prepare("SELECT summary_json FROM audit_logs WHERE action='ai.neuron_limit_changed'").first<{ summary_json:string }>();
-    expect(JSON.parse(audit?.summary_json ?? '{}')).toEqual({ entitlementNeurons: 400000 });
+    expect(JSON.parse(audit?.summary_json ?? '{}')).toEqual({ entitlementNeurons: 400000, meaning: 'configured_safety_limit' });
   });
 
-  it('creates one quota notification and disables automatic replies when the configured entitlement is exhausted', async () => {
+  it('creates one quota notification and disables automatic replies when the configured safety limit is exhausted', async () => {
     const { conversationId, contactId } = await seedConversation();
     await env.DB.prepare("UPDATE system_settings SET value_json='1' WHERE key='ai_daily_neuron_limit'").run();
     await env.DB.prepare("UPDATE system_settings SET value_json='\"auto\"' WHERE key='ai_global_mode'").run();
