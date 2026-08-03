@@ -9,10 +9,14 @@ describe('API contracts', () => {
     const valid = {
       action: 'reply', intent: 'price_question', confidence: 0.91, needs_human: false,
       needs_research: false, should_notify_admin: false, note_updates: [],
-      requirement_updates: { website_type: 'kurumsal' }, reply: 'Size yardımcı olayım.'
+      requirement_updates: { website_type: 'kurumsal', requested_pages: ['Ana Sayfa', 'İletişim'] }, reply: 'Size yardımcı olayım.'
     };
-    expect(AiDecisionSchema.parse(valid).action).toBe('reply');
+    const parsed = AiDecisionSchema.parse(valid);
+    expect(parsed.action).toBe('reply');
+    expect(parsed.requirement_updates.requested_pages).toEqual(['Ana Sayfa', 'İletişim']);
     expect(() => AiDecisionSchema.parse({ ...valid, confidence: 1.2 })).toThrow();
+    expect(() => AiDecisionSchema.parse({ ...valid, requirement_updates: { requested_pages: Array(101).fill('Sayfa') } })).toThrow();
+    expect(() => AiDecisionSchema.parse({ ...valid, requirement_updates: { requested_pages: [{ unsafe: true }] } })).toThrow();
   });
 
   it('enforces strong setup and message boundaries', () => {
