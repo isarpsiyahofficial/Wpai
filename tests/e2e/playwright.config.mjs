@@ -5,10 +5,10 @@ export default defineConfig({
   testMatch: ['responsive.spec.mjs'],
   fullyParallel: false,
   forbidOnly: true,
-  retries: 1,
+  retries: 0,
   workers: 1,
-  timeout: 120_000,
-  expect: { timeout: 10_000 },
+  timeout: 60_000,
+  expect: { timeout: 8_000 },
   reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
   use: {
     baseURL: 'http://127.0.0.1:4173',
