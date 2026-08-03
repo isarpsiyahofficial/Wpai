@@ -1,11 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": false,
     "isolatedModules": true,
     "noEmit": true,
     "strict": true,
@@ -15,7 +14,7 @@
     "noImplicitOverride": true,
     "useDefineForClassFields": true,
     "jsx": "react-jsx",
-    "types": ["vite/client", "@cloudflare/workers-types"],
+    "types": ["vite/client"],
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["./src/shared/*"],
@@ -23,6 +22,6 @@
       "@frontend/*": ["./src/frontend/*"]
     }
   },
-  "include": ["src", "tests", "vite.config.ts", "scripts/**/*.ts"],
+  "include": ["src", "tests", "worker-configuration.d.ts", "vite.config.ts", "vitest.*.config.ts"],
   "exclude": ["dist", "node_modules", "src-tauri", "sidecar"]
 }
