@@ -159,7 +159,19 @@ export async function publicRawJson<T>(path: string, init: RequestInit = {}): Pr
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = desktop.available() ? await desktopFetch(path, init) : await webFetch(path, init);
-  return parseJson<T>(response);
+  const data = await parseJson<T>(response);
+  if (
+    desktop.available()
+    && path === '/api/training/memory/clear'
+    && (init.method ?? 'GET').toUpperCase() === 'POST'
+  ) {
+    await desktop.faissClear();
+    const status = await desktop.faissStatus() as { count?: number };
+    if (status.count !== 0) {
+      throw new Error('Bulut AI hafızası kapatıldı ancak bu cihazdaki yerel FAISS temizlenemedi. Yerel indeksi yeniden temizleyin.');
+    }
+  }
+  return data;
 }
 
 export async function apiBlob(path: string): Promise<Blob> {
