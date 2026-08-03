@@ -99,7 +99,7 @@ extendedApiRoutes.post('/contacts/import-csv', zValidator('json', CsvImportSchem
   const companyIndex = findHeader(headers, ['firma', 'sirket', 'company']);
   const cityIndex = findHeader(headers, ['sehir', 'şehir', 'city']);
   const noteIndex = findHeader(headers, ['not', 'note']);
-  const candidates = new Map<string, { phone: string; name: string; company?: string; city?: string; note?: string; row: number }>();
+  const candidates = new Map<string, { phone: string; countryCode: string; name: string; company?: string; city?: string; note?: string; row: number }>();
   const invalid: Array<{ row: number; phone: string; reason: string }> = [];
   let duplicateInFile = 0;
   for (let index = 1; index < rows.length; index += 1) {
@@ -111,6 +111,7 @@ extendedApiRoutes.post('/contacts/import-csv', zValidator('json', CsvImportSchem
     if (candidates.has(normalized.e164)) { duplicateInFile += 1; continue; }
     candidates.set(normalized.e164, {
       phone: normalized.e164,
+      countryCode: normalized.countryCode,
       name: row[nameIndex]?.trim() || normalized.e164,
       ...(row[companyIndex]?.trim() ? { company: row[companyIndex]!.trim() } : {}),
       ...(row[cityIndex]?.trim() ? { city: row[cityIndex]!.trim() } : {}),
@@ -123,6 +124,7 @@ extendedApiRoutes.post('/contacts/import-csv', zValidator('json', CsvImportSchem
   const optedOut = new Set<string>();
   for (let offset = 0; offset < phones.length; offset += 80) {
     const chunk = phones.slice(offset, offset + 80);
+    if (!chunk.length) continue;
     const placeholders = chunk.map(() => '?').join(',');
     for (const item of await all<{ phone_e164: string }>(c.env.DB, `SELECT phone_e164 FROM contacts WHERE phone_e164 IN (${placeholders}) AND deleted_at IS NULL`, ...chunk)) existing.add(item.phone_e164);
     for (const item of await all<{ phone_e164: string }>(c.env.DB, `SELECT p.phone_e164 FROM opt_outs o JOIN contacts p ON p.id=o.contact_id WHERE p.phone_e164 IN (${placeholders}) AND o.revoked_at IS NULL`, ...chunk)) optedOut.add(item.phone_e164);
@@ -133,8 +135,8 @@ extendedApiRoutes.post('/contacts/import-csv', zValidator('json', CsvImportSchem
     const statements: D1PreparedStatement[] = [];
     for (const item of eligible) {
       const contactId = crypto.randomUUID();
-      statements.push(c.env.DB.prepare(`INSERT INTO contacts (id,phone_e164,display_name,company_name,city,country_code,source,status,created_at,updated_at) VALUES (?,?,?,?,?,'ZZ','csv','lead',?,?)`).bind(contactId, item.phone, item.name.slice(0,160), item.company?.slice(0,200) ?? null, item.city?.slice(0,120) ?? null, now, now));
-      if (item.note) statements.push(c.env.DB.prepare(`INSERT INTO customer_notes (id,contact_id,source,note_text,created_by_admin_id,created_at,updated_at) VALUES (?,?,'admin',?,?,?,?,?)`).bind(crypto.randomUUID(), contactId, item.note.slice(0,2000), c.get('adminId')!, now, now));
+      statements.push(c.env.DB.prepare(`INSERT INTO contacts (id,phone_e164,display_name,company_name,city,country_code,source,status,created_at,updated_at) VALUES (?,?,?,?,?,?,'csv','lead',?,?)`).bind(contactId, item.phone, item.name.slice(0,160), item.company?.slice(0,200) ?? null, item.city?.slice(0,120) ?? null, item.countryCode, now, now));
+      if (item.note) statements.push(c.env.DB.prepare(`INSERT INTO customer_notes (id,contact_id,source,note_text,created_by_admin_id,created_at,updated_at) VALUES (?,?,'admin',?,?,?,?)`).bind(crypto.randomUUID(), contactId, item.note.slice(0,2000), c.get('adminId')!, now, now));
     }
     const results = await c.env.DB.batch(statements);
     if (results.some(item => !item.success)) throw new Error('CSV_IMPORT_FAILED');
