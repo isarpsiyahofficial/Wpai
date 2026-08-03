@@ -20,7 +20,7 @@ webhookRoutes.post('/whatsapp', async c => {
   const credentials = await getMetaCredentials(c.env);
   if (!credentials) return fail(c, 'META_NOT_CONFIGURED', 'Meta bağlantısı yapılandırılmamış.', 503);
   const raw = await c.req.arrayBuffer();
-  const signature = c.req.header('X-Hub-Signature-256');
+  const signature = c.req.header('X-Hub-Signature-256') ?? null;
   if (!(await verifyWebhookSignature(credentials.appSecret, raw, signature))) return fail(c, 'WEBHOOK_SIGNATURE_INVALID', 'Geçersiz webhook imzası.', 401);
   const payloadHash = await digestHex(raw);
   const eventId = crypto.randomUUID();
