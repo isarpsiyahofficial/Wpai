@@ -9,15 +9,18 @@ const KEYRING_USER: &str = "cloudflare-api-token";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FaissItem { id: String, vector: Vec<f32>, metadata: Value }
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct FaissMatch { id: String, score: f32, metadata: Value }
+
+fn validate_cloudflare_token(token: &str) -> Result<(), String> {
+    if !(30..=4096).contains(&token.len()) {
+        return Err("Cloudflare tokeni geçersiz görünüyor.".into());
+    }
+    Ok(())
+}
 
 #[tauri::command]
 fn save_cloudflare_token(token: String) -> Result<(), String> {
-    if token.len() < 30 || token.len() > 4096 { return Err("Cloudflare tokeni geçersiz görünüyor.".into()); }
+    validate_cloudflare_token(&token)?;
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|_| "Windows Credential Manager açılamadı.".to_string())?
         .set_password(&token)
@@ -104,4 +107,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("WPAI masaüstü uygulaması başlatılamadı");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_cloudflare_token;
+
+    #[test]
+    fn accepts_reasonable_cloudflare_token_length() {
+        assert!(validate_cloudflare_token(&"x".repeat(30)).is_ok());
+        assert!(validate_cloudflare_token(&"x".repeat(4096)).is_ok());
+    }
+
+    #[test]
+    fn rejects_short_cloudflare_token() {
+        assert!(validate_cloudflare_token("too-short").is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_cloudflare_token() {
+        assert!(validate_cloudflare_token(&"x".repeat(4097)).is_err());
+    }
 }
