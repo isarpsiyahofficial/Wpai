@@ -26,6 +26,7 @@ def validate_files() -> None:
         "src/worker/index.ts", "src/worker/usageApi.ts", "src/frontend/main.tsx",
         "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx",
         "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
+        "src/frontend/pages/dashboardReports.tsx", "src/frontend/pages/index.ts",
         "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs", "sidecar/faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
         "migrations/0005_runtime_hardening.sql", "migrations/0006_ai_usage_and_summary_settings.sql",
@@ -134,6 +135,10 @@ def validate_product_scope() -> None:
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
 
+    pages_index = (ROOT / "src/frontend/pages/index.ts").read_text("utf-8")
+    if "export { DashboardPage, ReportsPage } from './dashboardReports';" not in pages_index:
+        raise AssertionError("Dashboard and reports must use the transparent Neuron views")
+
     ai_page = (ROOT / "src/frontend/pages/aiPage.tsx").read_text("utf-8")
     for label in (
         "Bugün kullanılan", "Resmî günlük tahsis", "Resmî tahsise kalan",
@@ -144,6 +149,15 @@ def validate_product_scope() -> None:
     ):
         if label not in ai_page:
             raise AssertionError(f"Neuron usage field missing from active AI page: {label}")
+
+    dashboard_reports = (ROOT / "src/frontend/pages/dashboardReports.tsx").read_text("utf-8")
+    for label in (
+        "Bugün kullanılan tahmini Neuron", "Resmî günlük tahsis",
+        "Resmî tahsise kalan (uygulama tahmini)", "Yönetici güvenlik limiti",
+        "Güvenlik limitine kalan", "Güvenlik limiti kullanımı", "Sağlayıcı raporu"
+    ):
+        if label not in dashboard_reports:
+            raise AssertionError(f"Neuron distinction missing from dashboard or reports: {label}")
 
     usage_api = (ROOT / "src/worker/usageApi.ts").read_text("utf-8")
     for field in (
