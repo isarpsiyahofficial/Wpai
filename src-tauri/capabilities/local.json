@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "wpai-local",
+  "description": "Allows only the packaged WPAI main window to use the minimal desktop session, preferences and local FAISS commands.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": ["core:default", "allow-wpai-commands"]
+}
