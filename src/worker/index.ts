@@ -46,7 +46,12 @@ app.route('/api', scopedFileRoutes);
 app.route('/api', usageApiRoutes);
 app.route('/webhooks', webhookRoutes);
 
-app.notFound(async c => c.env.ASSETS.fetch(c.req.raw));
+app.notFound(async c => {
+  if (c.req.path === '/api' || c.req.path.startsWith('/api/') || c.req.path.startsWith('/webhooks/')) {
+    return c.json({ ok: false, error: { code: 'NOT_FOUND', message: 'API yolu bulunamadı.', requestId: c.get('requestId') } }, 404);
+  }
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 app.onError((error, c) => {
   console.error(JSON.stringify({ level: 'error', event: 'request_failed', requestId: c.get('requestId'), name: error.name }));
   return c.json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'İşlem tamamlanamadı.', requestId: c.get('requestId') } }, 500);
