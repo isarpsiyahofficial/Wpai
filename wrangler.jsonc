@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "wa-ai-panel",
   "main": "src/worker/index.ts",
-  "compatibility_date": "2026-08-02",
+  "compatibility_date": "2026-08-03",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
@@ -18,7 +18,7 @@
     "DEFAULT_AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
     "DEFAULT_EMBEDDING_MODEL": "@cf/baai/bge-m3",
     "CLOUDFLARE_ACCOUNT_ID": "ad8e99c82c6c17d823f6877ff1efade4",
-    "PROJECT_MANIFEST_VERSION": "2"
+    "PROJECT_MANIFEST_VERSION": "3"
   },
   "d1_databases": [
     {
@@ -33,20 +33,22 @@
   ],
   "ai": { "binding": "AI" },
   "vectorize": [
-    { "binding": "KNOWLEDGE_INDEX", "index_name": "wpai-knowledge" }
+    { "binding": "KNOWLEDGE_INDEX", "index_name": "wa-ai-knowledge-prod" }
   ],
   "queues": {
     "producers": [
       { "binding": "INBOUND_AI", "queue": "wa-inbound-ai" },
       { "binding": "OUTBOUND", "queue": "wa-outbound" },
       { "binding": "ADMIN_NOTIFY", "queue": "wa-admin-notify" },
+      { "binding": "KNOWLEDGE_SYNC", "queue": "wa-knowledge-index" },
       { "binding": "AI_DLQ", "queue": "wa-ai-dlq" },
       { "binding": "OUTBOUND_DLQ", "queue": "wa-outbound-dlq" }
     ],
     "consumers": [
       { "queue": "wa-inbound-ai", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 4, "dead_letter_queue": "wa-ai-dlq" },
       { "queue": "wa-outbound", "max_batch_size": 10, "max_batch_timeout": 2, "max_retries": 5, "dead_letter_queue": "wa-outbound-dlq" },
-      { "queue": "wa-admin-notify", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 4, "dead_letter_queue": "wa-outbound-dlq" }
+      { "queue": "wa-admin-notify", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 4, "dead_letter_queue": "wa-outbound-dlq" },
+      { "queue": "wa-knowledge-index", "max_batch_size": 5, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "wa-ai-dlq" }
     ]
   },
   "triggers": { "crons": ["*/5 * * * *", "15 2 * * *"] },
