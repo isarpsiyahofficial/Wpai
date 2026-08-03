@@ -21,24 +21,52 @@ def assert_file(path: str) -> None:
 
 def validate_files() -> None:
     required = [
-        "package.json", "wrangler.jsonc", "index.html", "src/worker/index.ts", "src/frontend/main.tsx",
-        "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx", "src/frontend/pages/knowledgeAi.tsx",
+        "package.json", "package-lock.json", "wrangler.jsonc", "index.html",
+        ".github/workflows/ci.yml", ".github/workflows/windows-desktop.yml", ".github/workflows/deploy-production.yml",
+        "src/worker/index.ts", "src/worker/usageApi.ts", "src/frontend/main.tsx",
+        "src/frontend/pages/whatsapp.tsx", "src/frontend/pages/settings.tsx",
+        "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
         "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs", "sidecar/faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
         "migrations/0005_runtime_hardening.sql", "migrations/0006_ai_usage_and_summary_settings.sql",
         "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
-        "tests/worker/scoped-files.test.ts", "tests/unit/ai-claims.test.ts"
+        "tests/worker/scoped-files.test.ts", "tests/worker/neuron-usage.test.ts", "tests/unit/ai-claims.test.ts"
     ]
     for item in required:
         assert_file(item)
     forbidden = [
         ROOT / ".bootstrap", ROOT / ".source-bootstrap", ROOT / ".completion-patch-trigger",
-        ROOT / ".ai-state-trigger", ROOT / ".github/workflows/apply-completion-patch.yml",
-        ROOT / ".github/workflows/one-shot-ai-state.yml"
+        ROOT / ".ai-state-trigger", ROOT / ".package-lock-trigger",
+        ROOT / ".github/workflows/apply-completion-patch.yml",
+        ROOT / ".github/workflows/one-shot-ai-state.yml",
+        ROOT / ".github/workflows/generate-package-lock.yml"
     ]
     for path in forbidden:
         if path.exists():
             raise AssertionError(f"Temporary bootstrap or one-shot artifact must be removed: {path.name}")
+
+
+def validate_package_lock() -> None:
+    package = json.loads((ROOT / "package.json").read_text("utf-8"))
+    lock = json.loads((ROOT / "package-lock.json").read_text("utf-8"))
+    if lock.get("lockfileVersion") != 3:
+        raise AssertionError("package-lock.json must use npm lockfileVersion 3")
+    root = lock.get("packages", {}).get("")
+    if not isinstance(root, dict):
+        raise AssertionError("package-lock.json root package is missing")
+    for key in ("name", "version", "dependencies", "devDependencies"):
+        if root.get(key) != package.get(key):
+            raise AssertionError(f"package-lock.json is out of sync with package.json: {key}")
+
+    workflows = "\n".join((ROOT / path).read_text("utf-8") for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/windows-desktop.yml",
+        ".github/workflows/deploy-production.yml"
+    ))
+    if "npm install --no-audit --no-fund" in workflows or "npm install --ignore-scripts" in workflows:
+        raise AssertionError("CI and deployment workflows must install JavaScript dependencies with npm ci")
+    if workflows.count("npm ci") < 4:
+        raise AssertionError("Locked npm installs are missing from one or more workflows")
 
 
 def validate_wrangler() -> None:
@@ -105,15 +133,32 @@ def validate_product_scope() -> None:
     for label in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "WhatsApp Business API", "Parola Değiştir"):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
-    ai_page = (ROOT / "src/frontend/pages/knowledgeAi.tsx").read_text("utf-8")
-    for label in ("Kullanılan", "Mevcut hak / bütçe", "Kalan", "Aşım", "Giriş tokeni", "Çıkış tokeni"):
+
+    ai_page = (ROOT / "src/frontend/pages/aiPage.tsx").read_text("utf-8")
+    for label in (
+        "Bugün kullanılan", "Resmî günlük tahsis", "Resmî tahsise kalan",
+        "Yapılandırılmış günlük güvenlik limiti", "Güvenlik limitine kalan",
+        "Girdi / çıktı tokenı", "Son güncelleme", "Veri kaynağı: Hesaplanan tahmin",
+        "Uyarı eşiği", "Kritik eşik", "Durdurma eşiği", "Kota dolunca güvenli mod",
+        "Modele göre bugünkü kullanım", "İşlem türüne göre bugünkü kullanım", "30 Günlük Neuron Geçmişi"
+    ):
         if label not in ai_page:
-            raise AssertionError(f"Neuron usage field missing: {label}")
+            raise AssertionError(f"Neuron usage field missing from active AI page: {label}")
+
+    usage_api = (ROOT / "src/worker/usageApi.ts").read_text("utf-8")
+    for field in (
+        "estimatedUsedNeurons", "providerReportedUsedNeurons", "officialDailyAllocationNeurons",
+        "configuredSafetyLimitNeurons", "safetyLimitRemainingNeurons", "byModel", "byOperation",
+        "dailyHistory", "lastUpdatedAt", "providerUsageAvailable", "configuredFallbackMode"
+    ):
+        if field not in usage_api:
+            raise AssertionError(f"Neuron API field missing: {field}")
 
 
 if __name__ == "__main__":
     validate_files()
+    validate_package_lock()
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
+    print("Static validation passed: locked dependencies, files, Cloudflare manifest, D1 schema, safe defaults, Neuron fields and product scope are consistent.")
