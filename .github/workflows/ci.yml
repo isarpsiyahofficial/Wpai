@@ -32,10 +32,8 @@ jobs:
         run: npm run security:scan
       - name: Validate manifest, migrations and product scope
         run: npm run validate
-      - name: Generate Worker binding types
-        run: npm run types
-      - name: Strict TypeScript
-        run: npx tsc --noEmit
+      - name: Strict frontend, Worker and test TypeScript
+        run: npm run typecheck
       - name: Node unit tests
         run: npm run test:unit
       - name: Workerd integration tests
