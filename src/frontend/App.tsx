@@ -65,9 +65,9 @@ export function App() {
 
   return <div className={`app-shell ${collapsed ? 'collapsed' : ''}`}>
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">W</span>{!collapsed && <div><strong>WPAI</strong><small>WhatsApp + AI</small></div>}</div>
-      <nav>{NAV.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} title={item.label}><span>{item.icon}</span>{!collapsed && item.label}</button>)}</nav>
-      <button className="collapse" onClick={() => setCollapsed(value => !value)}>{collapsed ? '›' : '‹ Daralt'}</button>
+      <div className="brand"><span className="brand-mark" aria-hidden="true">W</span>{!collapsed && <div><strong>WPAI</strong><small>WhatsApp + AI</small></div>}</div>
+      <nav aria-label="Ana menü">{NAV.map(item => <button key={item.id} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)} title={item.label}><span aria-hidden="true">{item.icon}</span>{!collapsed && item.label}</button>)}</nav>
+      <button className="collapse" aria-label={collapsed ? 'Menüyü genişlet' : 'Menüyü daralt'} onClick={() => setCollapsed(value => !value)}><span aria-hidden="true">{collapsed ? '›' : '‹'}</span>{!collapsed && ' Daralt'}</button>
     </aside>
     <main className="main">
       <header className="topbar">
@@ -86,7 +86,7 @@ export function App() {
         {page === 'settings' && <SettingsPage notify={notify} health={health} />}
       </section>
     </main>
-    {toast && <div className={`toast ${toast.kind}`}>{toast.message}</div>}
+    {toast && <div className={`toast ${toast.kind}`} role="status" aria-live="polite">{toast.message}</div>}
   </div>;
 }
 
@@ -117,5 +117,5 @@ function LoginForm({ onReady, notify }: { onReady: (admin: Admin, csrf: string) 
   return <form onSubmit={submit} className="auth-form"><label>E-posta<input name="email" type="email" required autoComplete="username" /></label><label>Parola<input name="password" type="password" required minLength={12} autoComplete="current-password" /></label><button className="button primary" disabled={busy}>{busy ? 'Giriş yapılıyor…' : 'Giriş Yap'}</button></form>;
 }
 
-function AuthCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) { return <Centered><section className="auth-card"><div className="auth-logo">W</div><h1>{title}</h1><p>{description}</p>{children}</section></Centered>; }
+function AuthCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) { return <Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>{title}</h1><p>{description}</p>{children}</section></Centered>; }
 function Centered({ children }: { children: React.ReactNode }) { return <main className="centered">{children}</main>; }
