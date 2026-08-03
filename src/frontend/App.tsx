@@ -4,6 +4,7 @@ import {
   apiObjectUrl,
   desktopLogin,
   desktopLogout,
+  downloadApiFile,
   formValue,
   isDesktop,
   jsonBody,
@@ -13,7 +14,7 @@ import {
   setCsrfToken
 } from './api';
 import type { Admin, Health, Notify, PageId } from './types';
-import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';
+import { AiPage, ContactsPage, DashboardPage, DesktopIndexPanel, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';
 
 const NAV: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'dashboard', label: 'Gösterge Paneli', icon: '▦' },
@@ -122,6 +123,25 @@ export function App() {
     };
   }, [auth.phase, desktopMode]);
 
+  useEffect(() => {
+    if (!desktopMode || auth.phase !== 'ready') return;
+    const intercept = (event: MouseEvent) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href^="/api/"]') : null;
+      if (!target) return;
+      event.preventDefault();
+      const path = target.getAttribute('href');
+      if (!path) return;
+      const fallback = target.textContent?.replace(/^📎\s*/u, '').trim() || 'wpai-dosya';
+      const fileName = target.getAttribute('download') || fallback;
+      void downloadApiFile(path, fileName).catch(error => {
+        notify(error instanceof Error ? error.message : 'Dosya indirilemedi.', 'error');
+      });
+    };
+    document.addEventListener('click', intercept);
+    return () => document.removeEventListener('click', intercept);
+  }, [auth.phase, desktopMode, notify]);
+
   const logout = useCallback(async () => {
     if (desktopMode) await desktopLogout();
     else {
@@ -159,7 +179,7 @@ export function App() {
         {page === 'knowledge' && <KnowledgePage notify={notify} />}
         {page === 'files' && <FilesPage notify={notify} />}
         {page === 'ai' && <AiPage notify={notify} />}
-        {page === 'training' && <TrainingPage notify={notify} />}
+        {page === 'training' && <div className="page-stack"><TrainingPage notify={notify} /><DesktopIndexPanel notify={notify} /></div>}
         {page === 'notifications' && <NotificationsPage notify={notify} />}
         {page === 'reports' && <ReportsPage notify={notify} />}
         {page === 'settings' && <SettingsPage notify={notify} health={health} />}
