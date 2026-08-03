@@ -3,6 +3,7 @@ import { authRoutes } from './auth';
 import { apiRoutes } from './api';
 import { extendedApiRoutes } from './extendedApi';
 import { scopedFileRoutes } from './scopedFiles';
+import { usageApiRoutes } from './usageApi';
 import { webhookRoutes } from './webhook';
 import { handleQueue } from './queues';
 import { first, nowIso, run, setting } from './db';
@@ -41,6 +42,7 @@ app.route('/api/auth', authRoutes);
 app.route('/api', apiRoutes);
 app.route('/api', extendedApiRoutes);
 app.route('/api', scopedFileRoutes);
+app.route('/api', usageApiRoutes);
 app.route('/webhooks', webhookRoutes);
 
 app.notFound(async c => c.env.ASSETS.fetch(c.req.raw));
@@ -49,7 +51,7 @@ app.onError((error, c) => {
   return c.json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'İşlem tamamlanamadı.', requestId: c.get('requestId') } }, 500);
 });
 
-async function runScheduled(env: Env): Promise<void> {
+export async function runScheduled(env: Env): Promise<void> {
   const now = nowIso();
   const due = await env.DB.prepare("SELECT id, contact_id, conversation_id, title FROM follow_up_tasks WHERE status='pending' AND due_at <= ? ORDER BY due_at LIMIT 100").bind(now).all<{ id: string; contact_id: string; conversation_id: string | null; title: string }>();
   for (const task of due.results) {
