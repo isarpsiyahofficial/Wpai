@@ -47,14 +47,15 @@ jobs:
         run: |
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
-      - name: Commit patch for normal CI verification
+      - name: Restore protected workflows and commit source patch
         run: |
+          git checkout origin/${{ github.event.pull_request.head.ref }} -- .github/workflows/windows-desktop.yml
+          git checkout origin/${{ github.event.pull_request.head.ref }} -- .github/workflows/one-shot-spec500-hardening.yml
+          git checkout origin/${{ github.event.pull_request.head.ref }} -- .github/workflows/one-shot-spec500-apply.yml
+          git checkout origin/${{ github.event.pull_request.head.ref }} -- .github/workflows/one-shot-spec500-pr.yml
           Remove-Item scripts/apply_spec500.py
-          Remove-Item .github/workflows/one-shot-spec500-hardening.yml -ErrorAction SilentlyContinue
-          Remove-Item .github/workflows/one-shot-spec500-apply.yml -ErrorAction SilentlyContinue
-          Remove-Item .github/workflows/one-shot-spec500-pr.yml
           git config user.name 'WPAI Verification Bot'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
-          git commit -m 'Apply native desktop and 500-item verification gates'
+          git commit -m 'Apply native desktop and 500-item source gates'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
