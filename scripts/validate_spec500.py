@@ -41,10 +41,11 @@ def main() -> None:
     require("src/worker/localIndexApi.ts", "/training/local-index-bundle")
     require(
         ".github/workflows/windows-desktop.yml",
-        "Real NSIS install, open, single-instance and uninstall smoke",
+        "Real NSIS install, GUI subsystem, open, single-instance and uninstall smoke",
         "windows-smoke.json",
         "Prepare packaged Cloudflare bootstrap runtime",
         "cloudflareBootstrapScript",
+        "peSubsystem",
     )
 
     tauri = json.loads(text("src-tauri/tauri.conf.json"))
