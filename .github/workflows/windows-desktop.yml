@@ -7,6 +7,7 @@ on:
       - 'src/**'
       - 'src-tauri/**'
       - 'sidecar/**'
+      - 'desktop-bootstrap/**'
       - 'rust-toolchain.toml'
       - 'package.json'
       - 'package-lock.json'
@@ -74,6 +75,31 @@ jobs:
       - name: Rust locked compile check
         shell: pwsh
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Prepare packaged Cloudflare bootstrap runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bootstrap = Join-Path $PWD 'desktop-bootstrap'
+          $runtime = Join-Path $bootstrap 'runtime'
+          $project = Join-Path $bootstrap 'project'
+          Remove-Item $runtime, $project -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $runtime, $project | Out-Null
+
+          $nodeExe = (Get-Command node).Source
+          $nodeHome = Split-Path -Parent $nodeExe
+          Copy-Item $nodeExe (Join-Path $runtime 'node.exe')
+          New-Item -ItemType Directory -Force -Path (Join-Path $runtime 'node_modules') | Out-Null
+          Copy-Item (Join-Path $nodeHome 'node_modules\npm') (Join-Path $runtime 'node_modules\npm') -Recurse
+
+          $files = @('package.json','package-lock.json','wrangler.jsonc','index.html','vite.config.ts','tsconfig.base.json','tsconfig.frontend.json','tsconfig.worker.json','tsconfig.json')
+          foreach ($file in $files) { Copy-Item (Join-Path $PWD $file) (Join-Path $project $file) }
+          Copy-Item (Join-Path $PWD 'src') (Join-Path $project 'src') -Recurse
+          Copy-Item (Join-Path $PWD 'migrations') (Join-Path $project 'migrations') -Recurse
+
+          if (-not (Test-Path (Join-Path $bootstrap 'bootstrap.mjs'))) { throw 'Cloudflare bootstrap script missing' }
+          if (-not (Test-Path (Join-Path $runtime 'node.exe'))) { throw 'Packaged Node runtime missing' }
+          if (-not (Test-Path (Join-Path $runtime 'node_modules\npm\bin\npm-cli.js'))) { throw 'Packaged npm runtime missing' }
+          if (-not (Test-Path (Join-Path $project 'wrangler.jsonc'))) { throw 'Packaged Wrangler project missing' }
       - name: Build NSIS installer
         shell: pwsh
         run: npm run desktop:build
@@ -138,6 +164,15 @@ jobs:
             throw "Installed application executable was not found in $installLocation"
           }
 
+          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $bootstrapNode = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          $bootstrapProject = Get-ChildItem -Path $installLocation -Filter 'wrangler.jsonc' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          if (-not $bootstrapScript -or -not $bootstrapNode -or -not $bootstrapProject) {
+            throw 'Installed Cloudflare first-run bootstrap resources are incomplete'
+          }
+
           $first = Start-Process -FilePath $installed.FullName -PassThru
           Start-Sleep -Seconds 10
           $first.Refresh()
@@ -179,6 +214,9 @@ jobs:
             registryDisplayIcon = [string]$entry.DisplayIcon
             installLocation = $installLocation
             installedExe = $installed.FullName
+            cloudflareBootstrapScript = $bootstrapScript.FullName
+            cloudflareBootstrapNode = $bootstrapNode.FullName
+            cloudflareBootstrapProject = $bootstrapProject.FullName
             firstInstanceAlive = $true
             processCountAfterSecondLaunch = $running.Count
             uninstallExitCode = $uninstall.ExitCode
