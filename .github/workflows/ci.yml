@@ -50,6 +50,20 @@ jobs:
           path: dist/web
           if-no-files-found: error
           retention-days: 14
+      - name: Create clean source audit archive
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=wpai-source-audit.zip HEAD
+          sha256sum wpai-source-audit.zip > wpai-source-audit.zip.sha256
+      - name: Upload clean source audit archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpai-source-audit-${{ github.sha }}
+          path: |
+            wpai-source-audit.zip
+            wpai-source-audit.zip.sha256
+          if-no-files-found: error
+          retention-days: 3
 
   faiss-linux:
     name: FAISS sidecar tests
