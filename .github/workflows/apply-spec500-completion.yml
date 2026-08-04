@@ -32,7 +32,7 @@ jobs:
           cache: pip
           cache-dependency-path: sidecar/requirements.txt
 
-      - name: Reassemble and verify completion patch
+      - name: Reassemble and verify completion patches
         shell: bash
         run: |
           set -euo pipefail
@@ -43,8 +43,15 @@ jobs:
           9a92d05c66578e132e1d3cef9144b1c5ee1f25945f641f01c98c950f48744183  scripts/spec500-patch/part-03a
           7af4cce8f20ec9edb11cbfb2628afee0e2c1de5ca02d15389e410573958633e7  scripts/spec500-patch/part-03b
           802c4941e83e0cb4339220f6c83dad9e6455a5d83ec5376ace6c9d34ccdfe1ae  scripts/spec500-patch/part-04
+          050310e0413d448b5a36f34ddcda0480c5f18e9ac5a4c2eb5a8999bf6469ec2e  scripts/spec500-patch/new-00
+          3699c47589760128ba054b5f4735e8e374a49839ed29bf52761d6a44114219e9  scripts/spec500-patch/new-01
+          f2608610f617946544ad8e772a2f6a3ea9cedf190fe665495702092621b11a7a  scripts/spec500-patch/new-02
+          5b5420ad448af1790461a8660300cc6476211ae8e47b9c15fd82caa09b29aca0  scripts/spec500-patch/new-03
+          4fa031c364afc20dadcbad7442917486c62debf6cb7e5b212be404a58b225ded  scripts/spec500-patch/new-04
+          253af41a3d7b403b8bf429b0734a54590566bbd74fe8180ea7141ab3eb386f85  scripts/spec500-patch/new-05
           EOF
           sha256sum --check /tmp/fragment-checksums
+
           cat \
             scripts/spec500-patch/part-00 \
             scripts/spec500-patch/part-01 \
@@ -54,15 +61,27 @@ jobs:
             scripts/spec500-patch/part-04 \
             > /tmp/spec500-completion.patch.gz.b64
           echo '82d1aeb192f3ec59a7b218baf55c517a9b2c2b7c992775e53167a719c0b73b8e  /tmp/spec500-completion.patch.gz.b64' | sha256sum --check
+
+          cat scripts/spec500-patch/new-00 scripts/spec500-patch/new-01 scripts/spec500-patch/new-02 scripts/spec500-patch/new-03 scripts/spec500-patch/new-04 scripts/spec500-patch/new-05 > /tmp/spec500-new-files.patch.gz.b64
+          echo 'fc2077841568bdb0c2d2cb1b07bf1135fbd63ee99b39984d042a65787bcb3694  /tmp/spec500-new-files.patch.gz.b64' | sha256sum --check
+
           python - <<'PY'
           import base64, gzip
           from pathlib import Path
-          encoded = Path('/tmp/spec500-completion.patch.gz.b64').read_bytes()
-          Path('/tmp/spec500-completion.patch').write_bytes(gzip.decompress(base64.b64decode(encoded, validate=True)))
+          for encoded_path, output_path in (
+              ('/tmp/spec500-completion.patch.gz.b64', '/tmp/spec500-completion.patch'),
+              ('/tmp/spec500-new-files.patch.gz.b64', '/tmp/spec500-new-files.patch'),
+          ):
+              encoded = Path(encoded_path).read_bytes()
+              Path(output_path).write_bytes(gzip.decompress(base64.b64decode(encoded, validate=True)))
           PY
           echo '6d241cca3f272bc703716f91fa496a5217239d910505d3c8021dd72690c1ba1b  /tmp/spec500-completion.patch' | sha256sum --check
+          echo 'e3d19758a39e4bdfc37a0cfd45133af179e7bd52372d50b61907b6d5a8ce64f1  /tmp/spec500-new-files.patch' | sha256sum --check
+
           git apply --check /tmp/spec500-completion.patch
           git apply /tmp/spec500-completion.patch
+          git apply --check /tmp/spec500-new-files.patch
+          git apply /tmp/spec500-new-files.patch
           rm -rf scripts/spec500-patch
 
       - name: Verify Python and static source integrity
