@@ -1,0 +1,40 @@
+name: WPAI Source Audit Export
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/source-audit-export.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: ${{ github.event.pull_request.head.ref == 'agent/wpai-production-rebuild' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 1
+      - name: Verify clean source tree
+        run: |
+          set -euo pipefail
+          git status --short
+          test -z "$(git status --short)"
+      - name: Create audit source archive
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=wpai-source-audit.zip HEAD
+          sha256sum wpai-source-audit.zip > wpai-source-audit.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WPAI-Source-Audit-${{ github.event.pull_request.head.sha }}
+          path: |
+            wpai-source-audit.zip
+            wpai-source-audit.zip.sha256
+          if-no-files-found: error
+          retention-days: 3
