@@ -21,6 +21,17 @@ MAX_METADATA_BYTES = 250_000
 TEXT_INDEX_VERSION = 1
 
 
+def configure_utf8_streams() -> None:
+    """Keep Turkish metadata lossless across Windows pipes and PyInstaller."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
+
+
+configure_utf8_streams()
+
+
 def emit(value: Any, code: int = 0) -> None:
     sys.stdout.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
     sys.stdout.flush()
@@ -120,58 +131,77 @@ def text_vector(text: str) -> np.ndarray:
 
     for word in words:
         add(f"w:{word}", 2.0)
-        padded = f"^{word}$"
-        for size in (3, 4, 5):
-            for offset in range(max(0, len(padded) - size + 1)):
-                add(f"c{size}:{padded[offset:offset + size]}", 0.35)
-    for left, right in zip(words, words[1:]):
-        add(f"b:{left}_{right}", 1.1)
+        if len(word) >= 3:
+            padded = f"^{word}$"
+            for index in range(len(padded) - 2):
+                add(f"g:{padded[index:index + 3]}", 0.5)
     return normalize(vector)[0]
 
 
-def build_text_index(ids: list[str], metadata: dict[str, dict[str, Any]]) -> np.ndarray:
-    if not ids:
-        return np.empty((0, EXPECTED_DIMENSION), dtype="float32")
-    rows = []
-    for item_id in ids:
-        text = searchable_text(metadata[item_id])
-        if not text:
-            text = item_id
-        rows.append(text_vector(text))
-    return np.vstack(rows).astype("float32")
-
-
-def checksum_payload(ids: list[str], vectors: np.ndarray, metadata: dict[str, dict[str, Any]]) -> str:
+def vector_content_checksum(ids: list[str], vectors: np.ndarray, metadata: dict[str, dict[str, Any]]) -> str:
     digest = hashlib.sha256()
     for index, item_id in enumerate(ids):
         digest.update(item_id.encode("utf-8"))
-        digest.update(vectors[index].astype("float32").tobytes())
+        digest.update(b"\0")
+        digest.update(np.asarray(vectors[index], dtype="float32").tobytes(order="C"))
+        digest.update(b"\0")
         digest.update(json.dumps(metadata[item_id], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        digest.update(b"\n")
     return digest.hexdigest()
 
 
-def atomic_write(
-    db: Path,
-    ids: list[str],
-    vectors: np.ndarray,
-    metadata: dict[str, dict[str, Any]],
-    source_checksum: str | None,
-) -> dict[str, Any]:
-    temp_dir = db / f".sync-{os.getpid()}-{time.time_ns()}"
-    temp_dir.mkdir(parents=True, exist_ok=False)
+def validate_checksum(value: Any) -> str:
+    checksum = str(value or "")
+    if len(checksum) != 64 or any(character not in "0123456789abcdefABCDEF" for character in checksum):
+        raise ValueError("SOURCE_CHECKSUM_INVALID")
+    return checksum.lower()
+
+
+def validate_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("VECTOR_METADATA_INVALID")
+    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > MAX_METADATA_BYTES:
+        raise ValueError("VECTOR_METADATA_TOO_LARGE")
+    return value
+
+
+def validate_items(value: Any) -> tuple[list[str], np.ndarray, dict[str, dict[str, Any]]]:
+    if not isinstance(value, list) or len(value) > MAX_VECTORS:
+        raise ValueError("VECTOR_LIST_INVALID")
+    ids: list[str] = []
+    vectors: list[list[float]] = []
+    metadata: dict[str, dict[str, Any]] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("VECTOR_ITEM_INVALID")
+        item_id = str(item.get("id", "")).strip()
+        if not item_id or len(item_id) > 256 or item_id in metadata:
+            raise ValueError("VECTOR_ID_DUPLICATE" if item_id in metadata else "VECTOR_ID_INVALID")
+        vector = item.get("vector")
+        if not isinstance(vector, list):
+            raise ValueError("VECTOR_VALUE_INVALID")
+        ids.append(item_id)
+        vectors.append(vector)
+        metadata[item_id] = validate_metadata(item.get("metadata", {}))
+    if not ids:
+        return [], np.empty((0, 0), dtype="float32"), {}
+    return ids, normalize(np.asarray(vectors, dtype="float32")), metadata
+
+
+def write_store(db: Path, ids: list[str], vectors: np.ndarray, metadata: dict[str, dict[str, Any]], source_checksum: str | None) -> dict[str, Any]:
+    temporary = db.parent / f"{db.name}.tmp-{os.getpid()}-{time.time_ns()}"
+    backup = db.parent / f"{db.name}.bak-{os.getpid()}-{time.time_ns()}"
+    temporary.mkdir(parents=True, exist_ok=False)
     try:
-        np.savez_compressed(temp_dir / "vectors.npz", ids=np.asarray(ids, dtype="U256"), vectors=vectors.astype("float32"))
-        (temp_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), "utf-8")
-        text_vectors = build_text_index(ids, metadata)
-        np.savez_compressed(temp_dir / "text-vectors.npz", ids=np.asarray(ids, dtype="U256"), vectors=text_vectors)
         if ids:
+            np.savez_compressed(temporary / "vectors.npz", ids=np.asarray(ids), vectors=vectors)
             index = faiss.IndexFlatIP(EXPECTED_DIMENSION)
             index.add(vectors)
-            faiss.write_index(index, str(temp_dir / "index.faiss"))
-            text_index = faiss.IndexFlatIP(EXPECTED_DIMENSION)
-            text_index.add(text_vectors)
-            faiss.write_index(text_index, str(temp_dir / "text-index.faiss"))
-        content_checksum = checksum_payload(ids, vectors, metadata) if ids else hashlib.sha256(b"").hexdigest()
+            faiss.write_index(index, str(temporary / "index.faiss"))
+        (temporary / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")), "utf-8"
+        )
+        content_checksum = vector_content_checksum(ids, vectors, metadata)
         state = {
             "sourceChecksum": source_checksum,
             "contentChecksum": content_checksum,
@@ -179,204 +209,187 @@ def atomic_write(
             "count": len(ids),
             "updatedAt": int(time.time()),
             "textIndexVersion": TEXT_INDEX_VERSION,
-            "textSearchReady": bool(ids),
+            "textSearchReady": True,
         }
-        (temp_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":")), "utf-8")
-        for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss", "text-vectors.npz", "text-index.faiss"):
-            source = temp_dir / name
-            destination = db / name
-            if source.exists():
-                os.replace(source, destination)
-            elif destination.exists():
-                destination.unlink()
+        (temporary / "state.json").write_text(json.dumps(state, separators=(",", ":")), "utf-8")
+        if db.exists():
+            os.replace(db, backup)
+        os.replace(temporary, db)
+        shutil.rmtree(backup, ignore_errors=True)
         return state
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception:
+        if backup.exists() and not db.exists():
+            os.replace(backup, db)
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
 
 
-def validate_item(item: Any) -> tuple[str, np.ndarray, dict[str, Any]]:
-    if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("vector"), list):
-        raise ValueError("VECTOR_ITEM_INVALID")
-    item_id = item["id"].strip()
-    if not item_id or len(item_id) > 256:
-        raise ValueError("VECTOR_ID_INVALID")
-    vector = normalize(np.asarray(item["vector"], dtype="float32"))[0]
-    metadata_value = item.get("metadata")
-    metadata = metadata_value if isinstance(metadata_value, dict) else {}
-    if len(json.dumps(metadata, ensure_ascii=False).encode("utf-8")) > MAX_METADATA_BYTES:
-        raise ValueError("VECTOR_METADATA_TOO_LARGE")
-    return item_id, vector, metadata
+def command_health(_args: argparse.Namespace) -> None:
+    emit({"ok": True, "version": "1.12.0", "dimension": EXPECTED_DIMENSION})
 
 
-def replace(db: Path, input_path: Path) -> None:
-    raw = read_json(input_path)
-    if not isinstance(raw, dict) or not isinstance(raw.get("vectors"), list):
+def command_status(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    ids, vectors, metadata, state = load_store(db)
+    if ids:
+        content_checksum = vector_content_checksum(ids, vectors, metadata)
+        if state.get("contentChecksum") not in (None, content_checksum):
+            raise ValueError("INDEX_CONTENT_CHECKSUM_MISMATCH")
+    state["ok"] = True
+    state["count"] = len(ids)
+    state["dimension"] = EXPECTED_DIMENSION if ids else 0
+    state.setdefault("textIndexVersion", TEXT_INDEX_VERSION)
+    state["textSearchReady"] = True
+    emit(state)
+
+
+def command_replace(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    payload = read_json(safe_input(args.input))
+    if not isinstance(payload, dict):
         raise ValueError("REPLACE_INPUT_INVALID")
-    source_checksum = raw.get("sourceChecksum")
-    if not isinstance(source_checksum, str) or len(source_checksum) != 64:
-        raise ValueError("SOURCE_CHECKSUM_INVALID")
-    items = raw["vectors"]
-    if len(items) > MAX_VECTORS:
-        raise ValueError("VECTOR_LIMIT_EXCEEDED")
-    try:
-        _, _, _, current = load_store(db)
-        text_index_current = (
-            current.get("textIndexVersion") == TEXT_INDEX_VERSION
-            and (int(current.get("count", 0)) == 0 or (db / "text-index.faiss").is_file())
-        )
-        if current.get("sourceChecksum") == source_checksum and text_index_current:
-            emit({"unchanged": True, **current})
-    except ValueError:
-        # A corrupt local cache is recoverable only through a complete verified replacement.
-        pass
-    table: dict[str, np.ndarray] = {}
-    metadata: dict[str, dict[str, Any]] = {}
-    for item in items:
-        item_id, vector, item_metadata = validate_item(item)
-        if item_id in table:
-            raise ValueError("VECTOR_ID_DUPLICATE")
-        table[item_id] = vector
-        metadata[item_id] = item_metadata
-    ids = sorted(table)
-    vectors = np.vstack([table[item_id] for item_id in ids]).astype("float32") if ids else np.empty((0, EXPECTED_DIMENSION), dtype="float32")
-    state = atomic_write(db, ids, vectors, metadata, source_checksum)
-    emit({"unchanged": False, **state})
+    source_checksum = validate_checksum(payload.get("sourceChecksum"))
+    ids, vectors, metadata = validate_items(payload.get("vectors"))
+    _, _, _, current = load_store(db)
+    if current.get("sourceChecksum") == source_checksum and int(current.get("count", -1)) == len(ids):
+        current["ok"] = True
+        current["unchanged"] = True
+        current.setdefault("textIndexVersion", TEXT_INDEX_VERSION)
+        current["textSearchReady"] = True
+        emit(current)
+    state = write_store(db, ids, vectors, metadata, source_checksum)
+    emit({"ok": True, "unchanged": False, **state})
 
 
-def upsert(db: Path, input_path: Path) -> None:
-    raw = read_json(input_path)
-    if not isinstance(raw, list) or not raw or len(raw) > 500:
-        raise ValueError("UPSERT_INPUT_INVALID")
-    ids, vectors, metadata, _ = load_store(db)
-    table: dict[str, np.ndarray] = {item_id: vectors[index] for index, item_id in enumerate(ids)} if vectors.size else {}
-    for item in raw:
-        item_id, vector, item_metadata = validate_item(item)
-        table[item_id] = vector
-        metadata[item_id] = item_metadata
-    next_ids = sorted(table)
-    next_vectors = np.vstack([table[item_id] for item_id in next_ids]).astype("float32")
-    state = atomic_write(db, next_ids, next_vectors, metadata, None)
-    emit({"count": len(raw), "total": len(next_ids), "dimension": EXPECTED_DIMENSION, "contentChecksum": state["contentChecksum"]})
+def command_upsert(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    existing_ids, existing_vectors, existing_metadata, state = load_store(db)
+    ids, vectors, metadata = validate_items(read_json(safe_input(args.input)))
+    position = {item_id: index for index, item_id in enumerate(existing_ids)}
+    rows = [existing_vectors[index].copy() for index in range(len(existing_ids))]
+    for index, item_id in enumerate(ids):
+        if item_id in position:
+            rows[position[item_id]] = vectors[index]
+        else:
+            position[item_id] = len(existing_ids)
+            existing_ids.append(item_id)
+            rows.append(vectors[index])
+        existing_metadata[item_id] = metadata[item_id]
+    matrix = normalize(np.asarray(rows, dtype="float32")) if rows else np.empty((0, 0), dtype="float32")
+    result = write_store(db, existing_ids, matrix, existing_metadata, state.get("sourceChecksum"))
+    emit({"ok": True, "count": len(ids), "total": len(existing_ids), **result})
 
 
-def delete(db: Path, input_path: Path) -> None:
-    raw = read_json(input_path)
-    ids_to_delete = raw.get("ids") if isinstance(raw, dict) else None
-    if not isinstance(ids_to_delete, list) or not ids_to_delete or len(ids_to_delete) > 1000:
+def command_delete(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    payload = read_json(safe_input(args.input))
+    if not isinstance(payload, dict) or not isinstance(payload.get("ids"), list):
         raise ValueError("DELETE_INPUT_INVALID")
-    requested = {str(value) for value in ids_to_delete if isinstance(value, str) and value}
-    ids, vectors, metadata, _ = load_store(db)
-    keep = [index for index, item_id in enumerate(ids) if item_id not in requested]
-    next_ids = [ids[index] for index in keep]
-    next_vectors = vectors[keep] if keep else np.empty((0, EXPECTED_DIMENSION), dtype="float32")
-    next_metadata = {item_id: metadata[item_id] for item_id in next_ids}
-    state = atomic_write(db, next_ids, next_vectors, next_metadata, None)
-    emit({"deleted": len(ids) - len(next_ids), **state})
+    delete_ids = {str(item).strip() for item in payload["ids"] if str(item).strip()}
+    ids, vectors, metadata, state = load_store(db)
+    keep = [index for index, item_id in enumerate(ids) if item_id not in delete_ids]
+    kept_ids = [ids[index] for index in keep]
+    kept_vectors = vectors[keep] if keep else np.empty((0, 0), dtype="float32")
+    kept_metadata = {item_id: metadata[item_id] for item_id in kept_ids}
+    result = write_store(db, kept_ids, kept_vectors, kept_metadata, state.get("sourceChecksum"))
+    emit({"ok": True, "deleted": len(ids) - len(kept_ids), **result})
 
 
-def clear(db: Path) -> None:
-    for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss", "text-vectors.npz", "text-index.faiss"):
-        path = db / name
-        if path.exists():
-            path.unlink()
-    emit({"cleared": True, "count": 0, "dimension": 0, "sourceChecksum": None})
-
-
-def status(db: Path) -> None:
-    ids, vectors, _, state = load_store(db)
-    emit({
-        "ok": True,
-        "count": len(ids),
-        "dimension": int(vectors.shape[1]) if vectors.size else 0,
-        "sourceChecksum": state.get("sourceChecksum"),
-        "contentChecksum": state.get("contentChecksum"),
-        "updatedAt": state.get("updatedAt"),
-        "textIndexVersion": state.get("textIndexVersion"),
-        "textSearchReady": bool(ids) and (db / "text-index.faiss").is_file(),
-    })
-
-
-def search(db: Path, input_path: Path) -> None:
-    raw = read_json(input_path)
-    if not isinstance(raw, dict) or not isinstance(raw.get("vector"), list):
+def command_search(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    payload = read_json(safe_input(args.input))
+    if not isinstance(payload, dict):
         raise ValueError("SEARCH_INPUT_INVALID")
-    ids, vectors, metadata, _ = load_store(db)
-    if not ids or not vectors.size:
+    ids, _vectors, metadata, _state = load_store(db)
+    if not ids:
         emit([])
-    query = normalize(np.asarray(raw["vector"], dtype="float32"))
-    top_k = max(1, min(20, int(raw.get("topK", 6))))
-    threshold = float(raw.get("threshold", -1.0))
-    if not np.isfinite(threshold) or threshold < -1.0 or threshold > 1.0:
+    threshold = float(payload.get("threshold", 0.62))
+    if not -1.0 <= threshold <= 1.0:
         raise ValueError("SEARCH_THRESHOLD_INVALID")
+    query = normalize(np.asarray(payload.get("vector"), dtype="float32"))[0]
     index_path = db / "index.faiss"
     if not index_path.exists():
         raise ValueError("FAISS_INDEX_MISSING")
     index = faiss.read_index(str(index_path))
-    if index.d != EXPECTED_DIMENSION or index.ntotal != len(ids):
-        raise ValueError("FAISS_INDEX_STATE_MISMATCH")
-    scores, positions = index.search(query, min(top_k, len(ids)))
-    result: list[dict[str, Any]] = []
-    for score, position in zip(scores[0].tolist(), positions[0].tolist()):
-        if 0 <= position < len(ids) and score >= threshold:
-            item_id = ids[position]
-            result.append({"id": item_id, "score": float(score), "metadata": metadata[item_id]})
-    emit(result)
+    top_k = max(1, min(int(payload.get("topK", 6)), 20, len(ids)))
+    scores, positions = index.search(query.reshape(1, -1), top_k)
+    matches: list[dict[str, Any]] = []
+    for score, position in zip(scores[0].tolist(), positions[0].tolist(), strict=True):
+        if position < 0 or score < threshold:
+            continue
+        item_id = ids[position]
+        matches.append({"id": item_id, "score": float(score), "metadata": metadata[item_id]})
+    emit(matches)
 
 
-def search_text(db: Path, input_path: Path) -> None:
-    raw = read_json(input_path)
-    query_text = raw.get("query") if isinstance(raw, dict) else None
-    if not isinstance(query_text, str) or not (2 <= len(query_text.strip()) <= 5000):
+def command_search_text(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    payload = read_json(safe_input(args.input))
+    if not isinstance(payload, dict):
+        raise ValueError("TEXT_SEARCH_INPUT_INVALID")
+    query = str(payload.get("query", "")).strip()
+    if not query or len(query) > 1000:
         raise ValueError("TEXT_QUERY_INVALID")
-    ids, _, metadata, state = load_store(db)
+    ids, _vectors, metadata, _state = load_store(db)
     if not ids:
         emit([])
-    text_index_path = db / "text-index.faiss"
-    if state.get("textIndexVersion") != TEXT_INDEX_VERSION or not text_index_path.is_file():
-        raise ValueError("TEXT_INDEX_REBUILD_REQUIRED")
-    index = faiss.read_index(str(text_index_path))
-    if index.d != EXPECTED_DIMENSION or index.ntotal != len(ids):
-        raise ValueError("TEXT_INDEX_STATE_MISMATCH")
-    query = text_vector(query_text.strip()).reshape(1, -1)
-    top_k = max(1, min(20, int(raw.get("topK", 8))))
-    threshold = float(raw.get("threshold", 0.12))
-    if not np.isfinite(threshold) or threshold < -1.0 or threshold > 1.0:
+    threshold = float(payload.get("threshold", 0.08))
+    if not -1.0 <= threshold <= 1.0:
         raise ValueError("SEARCH_THRESHOLD_INVALID")
-    scores, positions = index.search(query, min(top_k, len(ids)))
-    result: list[dict[str, Any]] = []
-    for score, position in zip(scores[0].tolist(), positions[0].tolist()):
-        if 0 <= position < len(ids) and score >= threshold:
-            item_id = ids[position]
-            result.append({"id": item_id, "score": float(score), "metadata": metadata[item_id]})
-    emit(result)
+    top_k = max(1, min(int(payload.get("topK", 8)), 20, len(ids)))
+    query_vector = text_vector(query)
+    document_vectors = normalize(np.asarray([text_vector(searchable_text(metadata[item_id])) for item_id in ids], dtype="float32"))
+    scores = document_vectors @ query_vector
+    order = np.argsort(-scores)
+    matches = [
+        {"id": ids[int(index)], "score": float(scores[int(index)]), "metadata": metadata[ids[int(index)]]}
+        for index in order[:top_k]
+        if float(scores[int(index)]) >= threshold
+    ]
+    emit(matches)
+
+
+def command_clear(args: argparse.Namespace) -> None:
+    db = safe_db(args.db)
+    if db.exists():
+        shutil.rmtree(db)
+    db.mkdir(parents=True, exist_ok=True)
+    emit({"cleared": True, "count": 0, "dimension": 0, "sourceChecksum": None})
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser(prog="faiss-service")
+    commands = value.add_subparsers(dest="command", required=True)
+    commands.add_parser("health")
+    for name in ("status", "clear"):
+        command = commands.add_parser(name)
+        command.add_argument("--db", required=(name != "health"))
+    for name in ("replace", "upsert", "delete", "search", "search-text"):
+        command = commands.add_parser(name)
+        command.add_argument("--db", required=True)
+        command.add_argument("--input", required=True)
+    return value
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="faiss-service")
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("health")
-    for command in ("status", "clear"):
-        item = sub.add_parser(command)
-        item.add_argument("--db", required=True)
-    for command in ("replace", "upsert", "delete", "search", "search-text"):
-        item = sub.add_parser(command)
-        item.add_argument("--db", required=True)
-        item.add_argument("--input", required=True)
-    args = parser.parse_args()
+    args = parser().parse_args()
     try:
-        if args.command == "health": emit({"ok": True, "version": getattr(faiss, "__version__", "unknown"), "dimension": EXPECTED_DIMENSION})
-        db = safe_db(args.db)
-        if args.command == "status": status(db)
-        if args.command == "clear": clear(db)
-        input_path = safe_input(args.input)
-        if args.command == "replace": replace(db, input_path)
-        if args.command == "upsert": upsert(db, input_path)
-        if args.command == "delete": delete(db, input_path)
-        if args.command == "search": search(db, input_path)
-        if args.command == "search-text": search_text(db, input_path)
-    except Exception as exc:
-        sys.stderr.write(str(exc)[:500])
-        raise SystemExit(1)
+        {
+            "health": command_health,
+            "status": command_status,
+            "replace": command_replace,
+            "upsert": command_upsert,
+            "delete": command_delete,
+            "search": command_search,
+            "search-text": command_search_text,
+            "clear": command_clear,
+        }[args.command](args)
+    except SystemExit:
+        raise
+    except Exception as error:  # noqa: BLE001 - safe error code only
+        sys.stderr.write(str(error)[:300])
+        sys.stderr.flush()
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
