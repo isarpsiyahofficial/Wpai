@@ -84,6 +84,9 @@ jobs:
           if value.count(old) != 1:
               raise SystemExit(f'Expected exactly one invalid knowledge source fixture, found {value.count(old)}')
           fixture.write_text(value.replace(old, new, 1), 'utf-8')
+
+          readme = Path('README.md')
+          readme.write_text(readme.read_text('utf-8').rstrip() + '\n', 'utf-8')
           PY
           rm -rf scripts/spec500-patch
 
