@@ -50,7 +50,7 @@ jobs:
             .gitignore package.json package-lock.json scripts/validate_spec500.py \
             src/frontend/App.tsx src/frontend/api.ts src/frontend/desktop.ts src/frontend/pages/settings.tsx \
             src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/permissions/default.toml \
-            src-tauri/src/lib.rs src-tauri/src/cloudflare.rs .github/workflows/windows-desktop.yml
+            src-tauri/src/lib.rs src-tauri/src/cloudflare.rs
           git diff --cached --check
           git commit -m 'enable in-app Cloudflare onboarding and setup'
           git push origin HEAD:agent/wpai-production-rebuild
