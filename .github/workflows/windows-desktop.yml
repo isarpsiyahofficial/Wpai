@@ -100,7 +100,7 @@ jobs:
           if (-not $entry) {
             Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
               Where-Object { $_.DisplayName -like '*WPAI*' } |
-              Select-Object DisplayName, InstallLocation, UninstallString |
+              Select-Object DisplayName, DisplayIcon, InstallLocation, UninstallString |
               Format-Table -AutoSize
             throw 'WPAI uninstall registry entry was not found after successful NSIS install'
           }
@@ -116,12 +116,25 @@ jobs:
             throw "Registered InstallLocation is unavailable: $($entry.InstallLocation)"
           }
 
-          $installed = Get-ChildItem -Path $installLocation -Filter *.exe -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notmatch '^(uninstall|setup|update)' } |
-            Sort-Object Length -Descending |
-            Select-Object -First 1
+          $installed = $null
+          $displayIcon = [string]$entry.DisplayIcon
+          if ($displayIcon) {
+            $displayIcon = ($displayIcon.Trim().Trim('"') -replace ',\d+$', '')
+            if ((Test-Path $displayIcon) -and (Split-Path -Leaf $displayIcon) -notmatch '^(faiss-service|uninstall|setup|update)') {
+              $installed = Get-Item $displayIcon
+            }
+          }
           if (-not $installed) {
-            Get-ChildItem -Path $installLocation -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, FullName -AutoSize
+            $installed = Get-ChildItem -Path $installLocation -Filter *.exe -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -notmatch '^(faiss-service|uninstall|setup|update)' } |
+              Where-Object { $_.FullName -notmatch '\\resources\\' } |
+              Sort-Object Length -Descending |
+              Select-Object -First 1
+          }
+          if (-not $installed) {
+            Get-ChildItem -Path $installLocation -Filter *.exe -File -Recurse -Force -ErrorAction SilentlyContinue |
+              Select-Object Name, Length, FullName |
+              Format-Table -AutoSize
             throw "Installed application executable was not found in $installLocation"
           }
 
@@ -163,6 +176,7 @@ jobs:
             installerSha256 = $hash
             authenticodeStatus = $signature
             registryDisplayName = [string]$entry.DisplayName
+            registryDisplayIcon = [string]$entry.DisplayIcon
             installLocation = $installLocation
             installedExe = $installed.FullName
             firstInstanceAlive = $true
