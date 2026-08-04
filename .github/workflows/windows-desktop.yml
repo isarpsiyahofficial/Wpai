@@ -63,6 +63,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
           Copy-Item dist/faiss-service.exe src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe
           if (-not (Test-Path src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe)) { throw 'FAISS sidecar executable missing' }
+      - name: Verify central product brand
+        shell: pwsh
+        run: python scripts/sync_brand.py
       - name: Typecheck web and Worker source
         shell: pwsh
         run: npm run typecheck
@@ -192,9 +195,15 @@ jobs:
           if ($running.Count -ne 1) { throw "Single-instance gate failed; process count=$($running.Count)" }
 
           $dataDir = Join-Path $env:APPDATA 'com.wpai.desktop'
-          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $faissCache = Join-Path $dataDir 'faiss-index'
+          $bootstrapCache = Join-Path $dataDir 'cloudflare-bootstrap'
+          New-Item -ItemType Directory -Force -Path $faissCache, $bootstrapCache | Out-Null
           $marker = Join-Path $dataDir 'uninstall-preserve-marker.txt'
+          $faissMarker = Join-Path $faissCache 'cache-marker.txt'
+          $bootstrapMarker = Join-Path $bootstrapCache 'cache-marker.txt'
           Set-Content -Path $marker -Value 'preserve-user-data'
+          Set-Content -Path $faissMarker -Value 'preserve-local-index-by-default'
+          Set-Content -Path $bootstrapMarker -Value 'preserve-bootstrap-cache-by-default'
 
           Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
           Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
@@ -211,6 +220,18 @@ jobs:
           Start-Sleep -Seconds 3
           if (Test-Path $installed.FullName) { throw 'Installed application executable remained after uninstall' }
           if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
+          if (-not (Test-Path $faissMarker) -or -not (Test-Path $bootstrapMarker)) { throw 'Silent uninstall removed local cache without explicit purge choice' }
+
+          $reinstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($reinstall.ExitCode -ne 0) { throw "NSIS silent reinstall failed: $($reinstall.ExitCode)" }
+          $purgeUninstaller = Get-ChildItem -Path $installLocation -Filter 'uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $purgeUninstaller) { throw 'NSIS uninstaller was not found after reinstall' }
+          $purge = Start-Process -FilePath $purgeUninstaller.FullName -ArgumentList '/S','/PURGELOCALCACHE' -PassThru -Wait
+          if ($purge.ExitCode -ne 0) { throw "NSIS purge uninstall failed: $($purge.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (-not (Test-Path $marker)) { throw 'Purge option removed non-cache user data' }
+          if (Test-Path $faissCache) { throw 'Purge option did not remove the local education index cache' }
+          if (Test-Path $bootstrapCache) { throw 'Purge option did not remove the Cloudflare bootstrap cache' }
 
           [ordered]@{
             checkedAt = (Get-Date).ToUniversalTime().ToString('o')
@@ -231,6 +252,10 @@ jobs:
             processCountAfterSecondLaunch = $running.Count
             uninstallExitCode = $uninstall.ExitCode
             userDataPreserved = (Test-Path $marker)
+            silentUninstallPreservedLocalCache = $true
+            purgeUninstallExitCode = $purge.ExitCode
+            purgeOptionRemovedLocalCache = (-not (Test-Path $faissCache) -and -not (Test-Path $bootstrapCache))
+            cloudDataUntouchedByLocalUninstaller = $true
             headSha = '${{ github.sha }}'
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 windows-smoke.json
           Get-Content windows-smoke.json
