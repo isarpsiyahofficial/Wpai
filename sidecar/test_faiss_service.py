@@ -18,12 +18,12 @@ def vector(position: int) -> list[float]:
 
 
 def run(*args: str) -> object:
-    completed = subprocess.run([sys.executable, str(SCRIPT), *args], check=True, capture_output=True, text=True)
+    completed = subprocess.run([sys.executable, str(SCRIPT), *args], check=True, capture_output=True, text=True, encoding="utf-8")
     return json.loads(completed.stdout)
 
 
 def run_failure(*args: str) -> str:
-    completed = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+    completed = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8")
     assert completed.returncode != 0
     return completed.stderr
 

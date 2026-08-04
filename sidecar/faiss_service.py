@@ -22,7 +22,7 @@ TEXT_INDEX_VERSION = 1
 
 
 def emit(value: Any, code: int = 0) -> None:
-    sys.stdout.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    sys.stdout.write(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
     sys.stdout.flush()
     raise SystemExit(code)
 
