@@ -1,0 +1,38 @@
+name: Update WPAI Cargo Lock Once
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/update-cargo-lock-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: ${{ github.event.pull_request.head.ref == 'agent/wpai-production-rebuild' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+      - name: Align and verify lockfile
+        run: |
+          python scripts/update_cargo_lock_version.py
+          cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Commit lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'WPAI Build Agent'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src-tauri/Cargo.lock
+          git diff --cached --check
+          git commit -m 'align WPAI Cargo lock version'
+          git push origin HEAD:agent/wpai-production-rebuild
