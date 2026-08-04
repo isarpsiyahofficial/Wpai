@@ -10,6 +10,7 @@ on:
       - 'rust-toolchain.toml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/validate_spec500.py'
       - '.github/workflows/windows-desktop.yml'
   pull_request:
     branches: [main]
@@ -24,9 +25,9 @@ concurrency:
 
 jobs:
   installer:
-    name: Build and verify NSIS setup.exe
+    name: Build, install and verify NSIS setup.exe
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -76,16 +77,67 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: npm run desktop:build
-      - name: Verify installer output
+      - name: Real NSIS install, open, single-instance and uninstall smoke
         shell: pwsh
         run: |
-          $installers = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -Recurse
-          if ($installers.Count -lt 1) { throw 'NSIS setup.exe was not produced' }
-          $installers | ForEach-Object { Write-Host "$($_.FullName) $($_.Length) bytes" }
-      - name: Upload Windows installer
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS setup.exe was not produced' }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+          $signature = (Get-AuthenticodeSignature $installer.FullName).Status.ToString()
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw "NSIS silent install failed: $($install.ExitCode)" }
+
+          $installed = Get-ChildItem -Path $env:LOCALAPPDATA -Filter WPAI.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installed) { throw 'Installed WPAI.exe was not found' }
+
+          $first = Start-Process -FilePath $installed.FullName -PassThru
+          Start-Sleep -Seconds 10
+          $first.Refresh()
+          if ($first.HasExited) { throw 'Installed WPAI.exe exited during startup smoke' }
+
+          $second = Start-Process -FilePath $installed.FullName -PassThru
+          Start-Sleep -Seconds 5
+          $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installed.FullName })
+          if ($running.Count -ne 1) { throw "Single-instance gate failed; process count=$($running.Count)" }
+
+          $dataDir = Join-Path $env:APPDATA 'com.wpai.desktop'
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $marker = Join-Path $dataDir 'uninstall-preserve-marker.txt'
+          Set-Content -Path $marker -Value 'preserve-user-data'
+
+          Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $uninstaller = Get-ChildItem -Path $installed.DirectoryName -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) { throw 'NSIS uninstaller was not found' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed: $($uninstall.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $installed.FullName) { throw 'WPAI.exe remained after uninstall' }
+          if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
+
+          [ordered]@{
+            checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+            installerName = $installer.Name
+            installerBytes = $installer.Length
+            installerSha256 = $hash
+            authenticodeStatus = $signature
+            installedExe = $installed.FullName
+            firstInstanceAlive = $true
+            processCountAfterSecondLaunch = $running.Count
+            uninstallExitCode = $uninstall.ExitCode
+            userDataPreserved = (Test-Path $marker)
+            headSha = '${{ github.sha }}'
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 windows-smoke.json
+          Get-Content windows-smoke.json
+      - name: Upload Windows installer and lifecycle evidence
         uses: actions/upload-artifact@v4
         with:
           name: WPAI-Windows-Setup-${{ github.sha }}
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            windows-smoke.json
           if-no-files-found: error
           retention-days: 30
