@@ -62,9 +62,21 @@ type IndexStatus = {
   embeddingModel: string;
   dimensions: number;
   metric: string;
+  totalSources: number;
+  approvedKnowledge: number;
+  totalChunks: number;
   activeChunks: number;
+  localArtifacts: number;
+  completedJobs: number;
   pendingJobs: number;
   failedJobs: number;
+  progressPercent: number;
+  estimatedEmbeddingTokens: number;
+  estimatedNeurons: number;
+  estimatedCostUsd: number;
+  pricingBasis: string;
+  estimatedRemainingSeconds: number | null;
+  lastSyncAt: string | null;
 };
 type Overview = { sessions: TrainingSession[]; items: TrainingItem[]; sources: Source[]; jobs: SyncJob[]; index: IndexStatus };
 type SessionDetail = { thread: TrainingSession; messages: TrainingMessage[]; items: TrainingItem[] };
@@ -94,6 +106,7 @@ export function TrainingPage({ notify }: { notify: Notify }) {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
   const [simulation, setSimulation] = useState('');
+  const [impact, setImpact] = useState<{ before: string; after: string; changed: boolean; itemTitle: string } | null>(null);
   const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
   const [importRecords, setImportRecords] = useState<unknown[]>([]);
   const [busy, setBusy] = useState(false);
@@ -304,6 +317,31 @@ export function TrainingPage({ notify }: { notify: Notify }) {
     finally { setBusy(false); }
   }
 
+  async function previewImpact(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedItem || selectedItem.status !== 'draft') {
+      notify('Canlı AI etkisi için yayınlanmamış bir taslak seçin.', 'info');
+      return;
+    }
+    const form = event.currentTarget;
+    setBusy(true);
+    try {
+      const result = await api<{ before: string; after: string; changed: boolean; itemTitle: string }>(`/api/training/items/${selectedItem.id}/impact-preview`, {
+        method: 'POST',
+        ...jsonBody({
+          scenario: formValue(form, 'scenario'),
+          scope: formValue(form, 'scope'),
+          contactId: formValue(form, 'contactId') || null,
+          conversationId: formValue(form, 'conversationId') || null
+        })
+      });
+      setImpact(result);
+      notify('Taslağın canlı AI cevabına olası etkisi karşılaştırıldı; müşteriye mesaj gönderilmedi.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Canlı AI etki karşılaştırması yapılamadı.', 'error');
+    } finally { setBusy(false); }
+  }
+
   async function exportMemory() {
     try {
       const result = await api<Record<string, unknown>>('/api/training/export');
@@ -367,11 +405,20 @@ export function TrainingPage({ notify }: { notify: Notify }) {
         </div>
       </div>
       <div className="metrics">
-        <article className="metric"><span>Bulut indeks</span><strong>{overview?.index.indexName ?? '—'}</strong><small>{overview?.index.dimensions ?? '—'} · {overview?.index.metric ?? '—'}</small></article>
-        <article className="metric"><span>Aktif chunk</span><strong>{overview?.index.activeChunks ?? '—'}</strong></article>
-        <article className="metric"><span>Bekleyen iş</span><strong>{overview?.index.pendingJobs ?? '—'}</strong></article>
-        <article className="metric"><span>Başarısız iş</span><strong>{overview?.index.failedJobs ?? '—'}</strong></article>
+        <article className="metric"><span>Toplam kaynak</span><strong>{overview?.index.totalSources ?? '—'}</strong><small>Onaylı bilgi: {overview?.index.approvedKnowledge ?? '—'}</small></article>
+        <article className="metric"><span>Toplam bilgi parçası</span><strong>{overview?.index.totalChunks ?? '—'}</strong><small>Canlı kullanılan: {overview?.index.activeChunks ?? '—'}</small></article>
+        <article className="metric"><span>Tamamlanan indeks işi</span><strong>{overview?.index.completedJobs ?? '—'}</strong><small>İlerleme %{overview?.index.progressPercent ?? '—'}</small></article>
+        <article className="metric"><span>Bekleyen / başarısız</span><strong>{overview ? `${overview.index.pendingJobs} / ${overview.index.failedJobs}` : '—'}</strong></article>
+        <article className="metric"><span>Tahmini indeks maliyeti</span><strong>{overview ? `$${Number(overview.index.estimatedCostUsd ?? 0).toFixed(6)}` : '—'}</strong><small>{overview?.index.estimatedNeurons ?? '—'} tahmini Neuron</small></article>
+        <article className="metric"><span>Tahmini kalan süre</span><strong>{formatDuration(overview?.index.estimatedRemainingSeconds ?? null)}</strong><small>Son senkronizasyon: {overview?.index.lastSyncAt ? formatDate(overview.index.lastSyncAt) : 'Henüz yok'}</small></article>
       </div>
+      <details className="advanced-status"><summary>Gelişmiş indeks durumu</summary><div className="summary-grid">
+        <div><span>Bulut indeks</span><strong>{overview?.index.indexName ?? '—'}</strong></div>
+        <div><span>Embedding modeli</span><strong>{overview?.index.embeddingModel ?? '—'}</strong></div>
+        <div><span>Boyut / metrik</span><strong>{overview ? `${overview.index.dimensions} / ${overview.index.metric}` : '—'}</strong></div>
+        <div><span>Yerel artifact</span><strong>{overview?.index.localArtifacts ?? '—'}</strong></div>
+        <div><span>Embedding girdi tokenı</span><strong>{overview?.index.estimatedEmbeddingTokens ?? '—'}</strong></div>
+      </div><p className="safe-note">{overview?.index.pricingBasis ?? 'Fiyat referansı yükleniyor.'}</p></details>
       {importPreview && <div className="summary-box"><strong>İçe aktarma önizlemesi</strong><pre>{JSON.stringify(importPreview, null, 2)}</pre><button className="button primary" onClick={() => void commitImport()}>Çakışmayan Taslakları İçe Aktar</button></div>}
     </section>
 
@@ -446,11 +493,34 @@ export function TrainingPage({ notify }: { notify: Notify }) {
       </div>
     </section>
 
+    <section className="panel training-impact">
+      <div className="panel-heading"><div><h3>Canlı AI’a Etkisi</h3><p>Seçili taslak yayınlanmadan önce aynı müşteri senaryosunda mevcut cevap ile taslak sonrası olası cevabı yan yana karşılaştırır. Hiçbir mesaj müşteriye gönderilmez.</p></div><span className={`pill ${selectedItem?.status === 'draft' ? 'ready' : 'warn'}`}>{selectedItem?.status === 'draft' ? selectedItem.title : 'Önce bir taslak seçin'}</span></div>
+      <form className="form-grid" onSubmit={previewImpact}>
+        <label className="wide">Test müşteri mesajı<textarea name="scenario" rows={5} required placeholder="Örn. Biraz indirim yaparsanız bugün başlayabiliriz. Ne kadar düşebilirsiniz?" /></label>
+        <label>Kapsam<select name="scope"><option value="global">Tüm işletme</option><option value="contact">Müşteri</option><option value="conversation">Konuşma</option></select></label>
+        <label>Müşteri ID<input name="contactId" /></label>
+        <label>Konuşma ID<input name="conversationId" /></label>
+        <div className="form-actions wide"><button className="button secondary" disabled={busy || selectedItem?.status !== 'draft'}>Eski ve Yeni Cevabı Karşılaştır</button></div>
+      </form>
+      {impact && <div className="impact-comparison">
+        <article className="summary-box"><strong>Mevcut canlı cevap</strong><p>{impact.before}</p></article>
+        <article className="summary-box"><strong>Taslak yayınlanırsa olası cevap</strong><p>{impact.after}</p></article>
+        <p className="safe-note">{impact.changed ? 'Taslak cevabı değiştiriyor. Yayınlamadan önce kapsam, fiyat ve devir kurallarını kontrol edin.' : 'Bu senaryoda anlamlı cevap değişikliği görülmedi.'}</p>
+      </div>}
+    </section>
+
     <section className="grid-two">
       <div className="panel table-panel"><h3>İndeks Senkronizasyon İşleri</h3><table><thead><tr><th>İş</th><th>Hedef</th><th>Durum</th><th>Deneme</th><th>Tarih</th></tr></thead><tbody>{overview?.jobs.slice(0, 50).map(job => <tr key={job.id}><td>{job.operation}<small>{job.knowledge_id ?? 'tüm indeks'}</small></td><td>{job.target}</td><td>{job.status}<small>{job.error_code ?? '—'}</small></td><td>{job.attempts}</td><td>{formatDate(job.completed_at ?? job.scheduled_at)}</td></tr>)}</tbody></table></div>
       <div className="panel danger-panel training-clear"><div><h3>Tüm AI Eğitim Hafızasını Sil</h3><p>Canlı eğitimleri ve indeksleri kapatır. Müşteri konuşmaları ile audit geçmişini silmez. Parola ve tam onay metni gerekir.</p></div><form className="form-stack" onSubmit={clearMemory}><label>Yönetici parolası<input name="password" type="password" required autoComplete="current-password" /></label><label>Onay metni<input name="confirmation" required placeholder="TÜM AI EĞİTİM HAFIZASINI SİL" /></label><button className="button danger-button">Hafızayı Güvenli Biçimde Temizle</button></form></div>
     </section>
   </div>;
+}
+
+function formatDuration(value: number | null): string {
+  if (value == null) return 'Hesaplanamıyor';
+  if (value < 60) return `${value} sn`;
+  const minutes = Math.ceil(value / 60);
+  return minutes < 60 ? `${minutes} dk` : `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`;
 }
 
 function dateTimeOrNull(value: string): string | null {

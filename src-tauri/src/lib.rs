@@ -513,6 +513,29 @@ async fn faiss_search(
     serde_json::from_value(value).map_err(|_| "FAISS arama sonucu okunamadı.".to_string())
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn faiss_search_text(
+    app: AppHandle,
+    query: String,
+    top_k: usize,
+    threshold: f32,
+) -> Result<Vec<FaissMatch>, String> {
+    let safe_query = query.trim();
+    if safe_query.chars().count() < 2 || safe_query.chars().count() > 5000 {
+        return Err("Yerel bilgi araması en az 2, en fazla 5000 karakter olmalıdır.".into());
+    }
+    if !threshold.is_finite() || !(-1.0..=1.0).contains(&threshold) {
+        return Err("Yerel bilgi arama eşiği geçersiz.".into());
+    }
+    let value = run_with_input(
+        &app,
+        "search-text",
+        serde_json::json!({ "query": safe_query, "topK": top_k.clamp(1, 20), "threshold": threshold }),
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|_| "Yerel bilgi arama sonucu okunamadı.".to_string())
+}
+
 #[tauri::command]
 async fn faiss_clear(app: AppHandle) -> Result<Value, String> {
     let db = faiss_db_path(&app)?;
@@ -618,6 +641,7 @@ pub fn run() {
             faiss_upsert,
             faiss_delete,
             faiss_search,
+            faiss_search_text,
             faiss_clear
         ])
         .run(tauri::generate_context!())

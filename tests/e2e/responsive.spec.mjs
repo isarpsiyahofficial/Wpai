@@ -245,7 +245,7 @@ async function installMocks(page, options = {}) {
       'GET /api/branding': { app_name: 'WPAI Yönetim Paneli', company_name: LONG_NAME, short_description: LONG_TEXT, logo_key: null, primary_color: '#7657ff', secondary_color: '#22c7e8', updated_at: NOW },
       'GET /api/canned-replies': [{ id: 'reply-1', title: 'Kurumsal paket açıklaması', body: LONG_TEXT, status: 'active', updated_at: NOW }],
       'GET /api/dead-letters': [{ id: 'dead-letter-1', source_queue: 'wa-outbound', payload_json: JSON.stringify({ messageId: 'message-1', secret: '[REDACTED]' }), error_code: 'META_TEMPORARY_ERROR', status: 'pending', attempts: 4, failed_at: NOW, retried_at: null, resolved_at: null }],
-      'GET /api/training/overview': { sessions: [], items: [], sources: [], jobs: [], index: { indexName: 'wa-ai-knowledge-prod', embeddingModel: '@cf/baai/bge-m3', dimensions: 1024, metric: 'cosine', activeChunks: 14, pendingJobs: 0, failedJobs: 0 } }
+      'GET /api/training/overview': { sessions: [], items: [], sources: [], jobs: [], index: { indexName: 'wa-ai-knowledge-prod', embeddingModel: '@cf/baai/bge-m3', dimensions: 1024, metric: 'cosine', totalSources: 5, approvedKnowledge: 4, totalChunks: 14, activeChunks: 14, localArtifacts: 4, completedJobs: 4, pendingJobs: 0, failedJobs: 0, progressPercent: 100, estimatedEmbeddingTokens: 12000, estimatedNeurons: 12.9, estimatedCostUsd: 0.000144, pricingBasis: '@cf/baai/bge-m3 için yapılandırılmış $0.012 / 1M girdi tokenı referansı', estimatedRemainingSeconds: null, lastSyncAt: NOW } }
     };
 
     if (pathname === '/api/conversations' && method === 'GET') {

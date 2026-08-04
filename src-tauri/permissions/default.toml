@@ -24,5 +24,6 @@ commands.allow = [
   "faiss_upsert",
   "faiss_delete",
   "faiss_search",
+  "faiss_search_text",
   "faiss_clear"
 ]

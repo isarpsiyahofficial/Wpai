@@ -4,6 +4,8 @@ import { getMetaCredentials, verifyWebhookSignature } from './meta';
 import { first, nowIso, run } from './db';
 import { fail } from './http';
 import { normalizePhone } from '../shared/phone';
+import { storeAttachment } from './files';
+import type { MetaCredentials } from './meta';
 
 export const webhookRoutes = new Hono<AppContext>();
 
@@ -30,7 +32,7 @@ webhookRoutes.post('/whatsapp', async c => {
   let payload: WhatsAppWebhook;
   try { payload = JSON.parse(new TextDecoder().decode(raw)) as WhatsAppWebhook; }
   catch { await run(c.env.DB, "UPDATE webhook_events SET status='failed', error_code='INVALID_JSON', processed_at=? WHERE id=?", nowIso(), eventId); return c.json({ received: true }); }
-  c.executionCtx.waitUntil(processPayload(c.env, payload, eventId));
+  c.executionCtx.waitUntil(processPayload(c.env, payload, eventId, credentials));
   return c.json({ received: true });
 });
 
@@ -40,13 +42,13 @@ type WhatsAppWebhook = {
 type MetaInbound = { id?: string; from?: string; timestamp?: string; type?: string; text?: { body?: string }; image?: { id?: string; mime_type?: string; caption?: string }; document?: { id?: string; mime_type?: string; filename?: string; caption?: string }; audio?: { id?: string; mime_type?: string }; video?: { id?: string; mime_type?: string; caption?: string }; reaction?: { message_id?: string; emoji?: string } };
 type MetaStatus = { id?: string; status?: string; timestamp?: string; errors?: Array<{ code?: number; title?: string }> };
 
-async function processPayload(env: AppContext['Bindings'], payload: WhatsAppWebhook, eventId: string): Promise<void> {
+async function processPayload(env: AppContext['Bindings'], payload: WhatsAppWebhook, eventId: string, credentials: MetaCredentials): Promise<void> {
   try {
     for (const entry of payload.entry ?? []) for (const change of entry.changes ?? []) {
       const value = change.value;
       const profileName = value?.contacts?.[0]?.profile?.name ?? 'WhatsApp Müşterisi';
       for (const status of value?.statuses ?? []) await processStatus(env, status);
-      for (const message of value?.messages ?? []) await processInbound(env, message, profileName);
+      for (const message of value?.messages ?? []) await processInbound(env, message, profileName, credentials);
     }
     await run(env.DB, "UPDATE webhook_events SET status='processed', processed_at=? WHERE id=?", nowIso(), eventId);
   } catch (error) {
@@ -54,7 +56,7 @@ async function processPayload(env: AppContext['Bindings'], payload: WhatsAppWebh
   }
 }
 
-async function processInbound(env: AppContext['Bindings'], message: MetaInbound, profileName: string): Promise<void> {
+async function processInbound(env: AppContext['Bindings'], message: MetaInbound, profileName: string, credentials: MetaCredentials): Promise<void> {
   if (!message.id || !message.from) return;
   const duplicate = await first<{ id: string }>(env.DB, 'SELECT id FROM messages WHERE meta_message_id=? LIMIT 1', message.id);
   if (duplicate) return;
@@ -73,9 +75,29 @@ async function processInbound(env: AppContext['Bindings'], message: MetaInbound,
   }
   const type = mapType(message.type);
   const text = message.text?.body ?? message.image?.caption ?? message.document?.caption ?? message.video?.caption ?? message.reaction?.emoji ?? null;
+  let attachmentId: string | null = null;
+  const media = inboundMedia(message);
+  if (media) {
+    try {
+      attachmentId = (await downloadInboundAttachment(env, credentials, {
+        ...media, conversationId: conversation.id, contactId: contact.id, metaMessageId: message.id
+      })).id;
+    } catch (error) {
+      const createdAt = nowIso();
+      const dedupe = `inbound-media:${message.id}`;
+      const exists = await first<{ id: string }>(env.DB, 'SELECT id FROM admin_notifications WHERE deduplication_key=?', dedupe);
+      if (!exists) {
+        await run(env.DB,
+          `INSERT INTO admin_notifications (id,type,priority,status,title,body,conversation_id,contact_id,deduplication_key,created_at,updated_at)
+           VALUES (?,'message_failure','high','unread','WhatsApp dosyası alınamadı',?,?,?,?,?,?)`,
+          crypto.randomUUID(), `Müşterinin ${type} dosyası özel depoya indirilemedi. Meta mesaj kimliği güvenli biçimde kaydedildi. Hata: ${safeCode(error)}`,
+          conversation.id, contact.id, dedupe, createdAt, createdAt);
+      }
+    }
+  }
   const messageId = crypto.randomUUID();
   await env.DB.batch([
-    env.DB.prepare(`INSERT INTO messages (id, conversation_id, contact_id, meta_message_id, direction, sender_type, message_type, text_content, delivery_status, received_at, created_at) VALUES (?, ?, ?, ?, 'inbound', 'customer', ?, ?, 'delivered', ?, ?)`).bind(messageId, conversation.id, contact.id, message.id, type, text, now, now),
+    env.DB.prepare(`INSERT INTO messages (id, conversation_id, contact_id, meta_message_id, direction, sender_type, message_type, text_content, attachment_id, delivery_status, received_at, created_at) VALUES (?, ?, ?, ?, 'inbound', 'customer', ?, ?, ?, 'delivered', ?, ?)`).bind(messageId, conversation.id, contact.id, message.id, type, text, attachmentId, now, now),
     env.DB.prepare(`UPDATE conversations SET unread_count=unread_count+1, last_inbound_at=?, last_message_at=?, current_context_version=current_context_version+1, updated_at=? WHERE id=? AND contact_id=?`).bind(now, now, now, conversation.id, contact.id),
     env.DB.prepare('UPDATE contacts SET display_name=CASE WHEN display_name = ? THEN ? ELSE display_name END, last_contact_at=?, updated_at=? WHERE id=?').bind('WhatsApp Müşterisi', profileName.slice(0,160), now, now, contact.id)
   ]);
@@ -90,6 +112,69 @@ async function processInbound(env: AppContext['Bindings'], message: MetaInbound,
     const debounce = 6;
     await env.INBOUND_AI.send({ jobId, conversationId: conversation.id, contactId: contact.id, sourceMessageId: messageId, expectedLastMessageId: messageId, enqueuedAt: now }, { delaySeconds: debounce });
   }
+}
+
+type InboundMedia = { mediaId: string; mimeType: string; originalName: string };
+
+function inboundMedia(message: MetaInbound): InboundMedia | null {
+  const media = message.image ?? message.document ?? message.audio ?? message.video;
+  if (!media?.id || !media.mime_type) return null;
+  const fallback = `${message.type ?? 'dosya'}-${message.id ?? crypto.randomUUID()}${extensionForMime(media.mime_type)}`;
+  const originalName = 'filename' in media && typeof media.filename === 'string' && media.filename.trim()
+    ? media.filename.trim().slice(0, 240)
+    : fallback;
+  return { mediaId: media.id, mimeType: media.mime_type, originalName };
+}
+
+async function downloadInboundAttachment(
+  env: AppContext['Bindings'],
+  credentials: MetaCredentials,
+  input: InboundMedia & { conversationId: string; contactId: string; metaMessageId: string }
+): Promise<{ id: string }> {
+  const metadataResponse = await fetch(
+    `https://graph.facebook.com/${env.META_GRAPH_API_VERSION}/${encodeURIComponent(input.mediaId)}`,
+    { headers: { Authorization: `Bearer ${credentials.accessToken}` }, signal: AbortSignal.timeout(20_000) }
+  );
+  const metadata = await metadataResponse.json<{ url?: string; mime_type?: string; file_size?: number }>()
+    .catch((): { url?: string; mime_type?: string; file_size?: number } => ({}));
+  if (!metadataResponse.ok || !metadata.url) throw new Error(`META_MEDIA_METADATA_${metadataResponse.status}`);
+  if (metadata.file_size && metadata.file_size > 25 * 1024 * 1024) throw new Error('META_MEDIA_TOO_LARGE');
+  const url = new URL(metadata.url);
+  const allowedHost = url.protocol === 'https:' && [
+    '.facebook.com', '.fbcdn.net', '.fbsbx.com', '.whatsapp.net'
+  ].some(suffix => url.hostname === suffix.slice(1) || url.hostname.endsWith(suffix));
+  if (!allowedHost) throw new Error('META_MEDIA_URL_REJECTED');
+  const mediaResponse = await fetch(url, {
+    headers: { Authorization: `Bearer ${credentials.accessToken}` },
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000)
+  });
+  if (!mediaResponse.ok) throw new Error(`META_MEDIA_DOWNLOAD_${mediaResponse.status}`);
+  const declaredSize = Number(mediaResponse.headers.get('content-length') ?? metadata.file_size ?? 0);
+  if (declaredSize > 25 * 1024 * 1024) throw new Error('META_MEDIA_TOO_LARGE');
+  const bytes = new Uint8Array(await mediaResponse.arrayBuffer());
+  if (!bytes.length) throw new Error('META_MEDIA_EMPTY');
+  const mimeType = String(metadata.mime_type ?? mediaResponse.headers.get('content-type') ?? input.mimeType).split(';')[0]!.trim().toLowerCase();
+  const stored = await storeAttachment(env, {
+    conversationId: input.conversationId,
+    contactId: input.contactId,
+    originalName: input.originalName || `whatsapp-${input.metaMessageId}${extensionForMime(mimeType)}`,
+    mimeType,
+    bytes,
+    source: 'customer'
+  });
+  return { id: stored.id };
+}
+
+function extensionForMime(mime: string): string {
+  const extensions: Record<string, string> = {
+    'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
+    'application/pdf': '.pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'text/csv': '.csv', 'text/plain': '.txt', 'audio/ogg': '.ogg', 'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a', 'video/mp4': '.mp4'
+  };
+  return extensions[mime.split(';')[0]!.trim().toLowerCase()] ?? '';
 }
 
 async function processStatus(env: AppContext['Bindings'], status: MetaStatus): Promise<void> {

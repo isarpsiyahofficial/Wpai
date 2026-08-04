@@ -19,7 +19,9 @@ def assert_file(path: str) -> None:
 
 def validate_files() -> None:
     required = [
-        "package.json", "package-lock.json", "wrangler.jsonc", "index.html", "rust-toolchain.toml",
+        "package.json", "package-lock.json", "wrangler.jsonc", "index.html", "rust-toolchain.toml", ".dev.vars.example",
+        "brand/product-brand.json", "scripts/sync_brand.py", "docs/SPEC-500-EVIDENCE.json",
+        "docs/WINDOWS-KURULUM-KALDIRMA.md", "docs/AI-EGITIM-MERKEZI-KILAVUZU.md", "docs/TEST-RAPORU.md",
         ".github/workflows/ci.yml", ".github/workflows/windows-desktop.yml",
         ".github/workflows/deploy-production.yml", ".github/workflows/e2e-live-scenarios.yml",
         "src/worker/index.ts", "src/worker/usageApi.ts", "src/worker/vectorSync.ts",
@@ -29,6 +31,7 @@ def validate_files() -> None:
         "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
         "src/frontend/pages/dashboardReports.tsx", "src/frontend/pages/index.ts",
         "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs",
+        "src-tauri/windows/installer-hooks.nsh",
         "sidecar/faiss_service.py", "sidecar/requirements.txt", "sidecar/test_faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
         "migrations/0004_feature_modules.sql", "migrations/0005_runtime_hardening.sql",
@@ -36,7 +39,7 @@ def validate_files() -> None:
         "migrations/0008_training_publication_links.sql", "migrations/0009_source_extractions.sql",
         "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
         "tests/worker/scoped-files.test.ts", "tests/worker/neuron-usage.test.ts", "tests/unit/ai-claims.test.ts",
-        "tests/e2e/playwright.config.mjs", "tests/e2e/responsive.spec.mjs", "tests/e2e/live-worker-smoke.mjs"
+        "tests/e2e/playwright.config.mjs", "tests/e2e/responsive.spec.mjs", "tests/e2e/offline-desktop.spec.mjs", "tests/e2e/live-worker-smoke.mjs"
     ]
     for item in required:
         assert_file(item)
@@ -116,6 +119,10 @@ def validate_e2e_gates() -> None:
     ):
         if required not in browser:
             raise AssertionError(f"Responsive browser coverage missing: {required}")
+    offline = (ROOT / "tests/e2e/offline-desktop.spec.mjs").read_text("utf-8")
+    for required in ("offline local knowledge mode", "faiss_search_text", "Müşteri mesajı gönderme"):
+        if required not in offline:
+            raise AssertionError(f"Offline desktop coverage missing: {required}")
     smoke = (ROOT / "tests/e2e/live-worker-smoke.mjs").read_text("utf-8")
     for required in (
         "health-and-security-headers", "auth-and-csrf", "contacts-and-csv",

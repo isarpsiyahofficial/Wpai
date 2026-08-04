@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['responsive.spec.mjs', 'auth-regression.spec.mjs'],
+  testMatch: ['responsive.spec.mjs', 'auth-regression.spec.mjs', 'offline-desktop.spec.mjs'],
   fullyParallel: false,
   forbidOnly: true,
   retries: 0,

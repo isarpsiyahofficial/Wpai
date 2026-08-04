@@ -7,7 +7,7 @@ import {
   enqueueKnowledgeSync
 } from '../../src/worker/vectorSync';
 import type { KnowledgeSyncJob } from '../../src/worker/types';
-import { authHeaders, request, resetBusinessData, setupAdmin } from './helpers';
+import { authHeaders, json, request, resetBusinessData, setupAdmin } from './helpers';
 
 type FakeQueueMessage<T> = {
   body: T;
@@ -223,4 +223,60 @@ describe('training publication, scoped retrieval and Vectorize lifecycle', () =>
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
   });
+  it('compares the current and draft-assisted answer without sending a customer message', async () => {
+    const auth = await setupAdmin();
+    const sessionResponse = await request('/api/training/sessions', {
+      method: 'POST', headers: authHeaders(auth), body: JSON.stringify({ title: 'Etki testi' })
+    });
+    expect(sessionResponse.status).toBe(201);
+    const session = await json<{ ok: true; data: { id: string } }>(sessionResponse);
+    const itemResponse = await request('/api/training/items', {
+      method: 'POST', headers: authHeaders(auth), body: JSON.stringify({
+        threadId: session.data.id, itemType: 'instruction', title: 'Pazarlıkta devir',
+        content: 'Müşteri ciddi indirim isterse kesin fiyat vermeden yöneticiye devret.',
+        usagePermission: 'both', scope: 'global', priority: 100
+      })
+    });
+    const item = await json<{ ok: true; data: { id: string } }>(itemResponse);
+    const ai = vi.spyOn(env.AI, 'run').mockImplementation(async (_model, input: unknown) => {
+      const text = JSON.stringify(input);
+      return { response: text.includes('Pazarlıkta devir') ? 'İndirim konusunda yöneticimiz sizinle iletişime geçecek.' : 'Size indirim sağlayabiliriz.' } as never;
+    });
+    const response = await request(`/api/training/items/${item.data.id}/impact-preview`, {
+      method: 'POST', headers: authHeaders(auth), body: JSON.stringify({ scenario: 'Biraz indirim yapar mısınız?', scope: 'global' })
+    });
+    expect(response.status).toBe(200);
+    const payload = await json<{ ok: true; data: { before: string; after: string; changed: boolean; sentToCustomer: boolean } }>(response);
+    expect(payload.data).toMatchObject({
+      before: 'Size indirim sağlayabiliriz.',
+      after: 'İndirim konusunda yöneticimiz sizinle iletişime geçecek.',
+      changed: true, sentToCustomer: false
+    });
+    expect(ai).toHaveBeenCalledTimes(2);
+    expect(await env.DB.prepare("SELECT id FROM audit_logs WHERE action='training.impact_preview'").first()).not.toBeNull();
+  });
+
+  it('reports complete indexing progress, estimated cost and remaining time fields', async () => {
+    const auth = await setupAdmin();
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO knowledge_sources (id,title,source_type,status,checksum,created_by_admin_id,created_at,updated_at) VALUES (?,?,?,'approved',?,?,?,?)`)
+        .bind(crypto.randomUUID(), 'Kaynak', 'txt', 'a'.repeat(64), auth.adminId, now, now),
+      env.DB.prepare(`INSERT INTO vector_sync_jobs (id,operation,target,status,idempotency_key,attempts,scheduled_at,started_at,completed_at,created_at,updated_at) VALUES (?,'rebuild','both','completed',?,1,?,?,?,?,?)`)
+        .bind(crypto.randomUUID(), 'b'.repeat(64), now, new Date(Date.now() - 2000).toISOString(), now, now, now),
+      env.DB.prepare(`INSERT INTO vector_sync_jobs (id,operation,target,status,idempotency_key,attempts,scheduled_at,created_at,updated_at) VALUES (?,'rebuild','both','queued',?,0,?,?,?)`)
+        .bind(crypto.randomUUID(), 'c'.repeat(64), now, now, now),
+      env.DB.prepare(`INSERT INTO ai_usage_records (id,model,operation_type,input_tokens,output_tokens,estimated_neurons,success,created_at) VALUES (?,?, 'embedding',1000000,0,1075,1,?)`)
+        .bind(crypto.randomUUID(), env.DEFAULT_EMBEDDING_MODEL, now)
+    ]);
+    const response = await request('/api/training/index-status', { headers: authHeaders(auth, false) });
+    expect(response.status).toBe(200);
+    const payload = await json<{ ok: true; data: { status: Record<string, unknown> } }>(response);
+    expect(payload.data.status).toMatchObject({
+      totalSources: 1, completedJobs: 1, pendingJobs: 1, estimatedEmbeddingTokens: 1000000,
+      estimatedNeurons: 1075, estimatedCostUsd: 0.012, pricingBasis: expect.stringContaining('$0.012')
+    });
+    expect(typeof payload.data.status.estimatedRemainingSeconds).toBe('number');
+  });
+
 });

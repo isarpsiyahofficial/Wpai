@@ -146,3 +146,39 @@ def test_search_rejects_invalid_threshold_and_missing_index(tmp_path: Path) -> N
     (db / "index.faiss").unlink()
     valid_query = write(tmp_path / "valid-query.json", {"vector": vector(0), "threshold": 0.0})
     assert "FAISS_INDEX_MISSING" in run_failure("search", "--db", str(db), "--input", str(valid_query))
+
+
+def test_offline_text_search_uses_local_faiss_and_approved_metadata(tmp_path: Path) -> None:
+    db = tmp_path / "db"
+    payload = write(tmp_path / "replace-text.json", {
+        "sourceChecksum": "e" * 64,
+        "vectors": [
+            {"id": "service:web", "vector": vector(0), "metadata": {
+                "title": "Kurumsal web sitesi", "category": "Hizmet", "content": "Admin panelli kurumsal web sitesi tasarımı ve ürün kataloğu"
+            }},
+            {"id": "service:hosting", "vector": vector(1), "metadata": {
+                "title": "Hosting", "category": "Teknik", "content": "Sunucu barındırma ve alan adı yönetimi"
+            }},
+        ],
+    })
+    result = run("replace", "--db", str(db), "--input", str(payload))
+    assert result["textSearchReady"] is True
+    query = write(tmp_path / "text-query.json", {"query": "ürün kataloglu admin panelli site", "topK": 5, "threshold": 0.05})
+    matches = run("search-text", "--db", str(db), "--input", str(query))
+    assert matches[0]["id"] == "service:web"
+    assert matches[0]["metadata"]["category"] == "Hizmet"
+    assert run("status", "--db", str(db))["textSearchReady"] is True
+
+
+def test_offline_text_search_rejects_empty_query_and_requires_rebuild(tmp_path: Path) -> None:
+    db = tmp_path / "db"
+    payload = write(tmp_path / "replace-text.json", {
+        "sourceChecksum": "f" * 64,
+        "vectors": [{"id": "one", "vector": vector(0), "metadata": {"title": "Örnek", "content": "Onaylı bilgi"}}],
+    })
+    run("replace", "--db", str(db), "--input", str(payload))
+    empty = write(tmp_path / "empty-text-query.json", {"query": " "})
+    assert "TEXT_QUERY_INVALID" in run_failure("search-text", "--db", str(db), "--input", str(empty))
+    (db / "text-index.faiss").unlink()
+    valid = write(tmp_path / "valid-text-query.json", {"query": "onaylı bilgi"})
+    assert "TEXT_INDEX_REBUILD_REQUIRED" in run_failure("search-text", "--db", str(db), "--input", str(valid))

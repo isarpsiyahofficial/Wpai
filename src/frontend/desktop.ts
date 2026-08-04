@@ -97,6 +97,9 @@ export const desktop = {
   faissSearch(vector: number[], topK = 6, threshold = 0.62): Promise<FaissMatch[]> {
     return requiredInvoke<FaissMatch[]>('faiss_search', { vector, topK, threshold });
   },
+  faissSearchText(query: string, topK = 8, threshold = 0.12): Promise<FaissMatch[]> {
+    return requiredInvoke<FaissMatch[]>('faiss_search_text', { query, topK, threshold });
+  },
   faissClear(): Promise<Record<string, unknown>> {
     return requiredInvoke<Record<string, unknown>>('faiss_clear');
   }

@@ -15,6 +15,8 @@ Tek işletmeye ait WhatsApp Business görüşmelerini, dosyaları, müşteri iht
 
 ## Temel güvenlik kuralları
 
+**AI varsayılan kapalıdır.** Eğitim veya indeks senkronizasyonu otomatik cevap modunu kendiliğinden açmaz.
+
 1. Her müşteri yalnız doğrulanmış `contact_id + conversation_id` ilişkisiyle işlenir.
 2. AI’ın başka konuşmaları listeleme, serbest SQL çalıştırma veya farklı müşteri kimliği seçme yetkisi yoktur.
 3. AI yalnız `approved` işletme bilgisi, mevcut müşteri profili, kısa özet ve son mesajlarla çalışır.
@@ -34,7 +36,7 @@ Tek işletmeye ait WhatsApp Business görüşmelerini, dosyaları, müşteri iht
 | D1 | `wa-ai-prod` |
 | D1 ID | `81983219-f57b-487b-8144-7c70bf9b1fe2` |
 | R2 | `wa-ai-files-prod` |
-| Vectorize | `wpai-knowledge` |
+| Vectorize | `wa-ai-knowledge-prod` |
 | Inbound Queue | `wa-inbound-ai` |
 | Outbound Queue | `wa-outbound` |
 | Admin Queue | `wa-admin-notify` |
@@ -189,3 +191,17 @@ EXE yalnız bir tarayıcı kısayolu değildir; güvenli Windows credential sakl
 ## Veri koruma
 
 Yönetici kişi bazında D1 verilerini dışa aktarabilir. Kalıcı silme işlemi tam telefon numarasıyla açık doğrulama ister; konuşmaya bağlı R2 dosyalarını da siler. Audit loglar secret, parola veya token içermez.
+
+## Çevrimdışı Windows modu
+
+Windows istemcisi internet bağlantısı kurulamadığında yalnız daha önce senkronize edilmiş ve yönetici tarafından onaylanmış yerel bilgileri aramaya açar. Bu modda mesaj gönderimi, Meta çağrıları, kayıt değişiklikleri ve bulut senkronizasyonu kapalıdır. Yerel arama sonucu bulutun güncel durumu gibi gösterilmez.
+
+## 500 maddelik şartname kanıtı
+
+Bağlayıcı şartnamenin SHA-256 değeri ve 1–500 arasındaki her madde için kaynak/test yolları `docs/SPEC-500-EVIDENCE.json` içinde tutulur. `scripts/validate_spec500.py` tam 500 kimliği, kanıt yollarını, sürüm/marka senkronizasyonunu, çevrimdışı yerel aramayı, eğitim etki karşılaştırmasını, indeks istatistiklerini ve Windows kaldırıcı kapılarını doğrular.
+
+Ayrıntılı kılavuzlar:
+
+- `docs/WINDOWS-KURULUM-KALDIRMA.md`
+- `docs/AI-EGITIM-MERKEZI-KILAVUZU.md`
+- `docs/TEST-RAPORU.md`

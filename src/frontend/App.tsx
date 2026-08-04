@@ -30,7 +30,7 @@ const NAV: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'settings', label: 'Ayarlar', icon: '⚙' }
 ];
 
-type AuthState = { phase: 'loading' | 'setup' | 'cloudflareSetup' | 'login' | 'ready'; admin?: Admin };
+type AuthState = { phase: 'loading' | 'setup' | 'cloudflareSetup' | 'login' | 'offline' | 'ready'; admin?: Admin };
 type Toast = { message: string; kind: 'success' | 'error' | 'info' } | null;
 type Branding = {
   app_name: string;
@@ -59,6 +59,7 @@ export function App() {
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>(null);
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
 
   const notify: Notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
@@ -69,6 +70,10 @@ export function App() {
   }, [desktopMode]);
 
   const boot = useCallback(async () => {
+    if (desktopMode && !navigator.onLine) {
+      setAuth({ phase: 'offline' });
+      return;
+    }
     try {
       const setup = await publicApi<{ required: boolean }>('/api/auth/setup-status');
       if (setup.required) {
@@ -92,12 +97,28 @@ export function App() {
         setAuth({ phase: 'login' });
       }
     } catch (error) {
+      if (desktopMode && isNetworkFailure(error)) {
+        setAuth({ phase: 'offline' });
+        notify('Bulut bağlantısı kurulamadı. Yalnız yerel, onaylı bilgiler çevrimdışı kullanılabilir.', 'info');
+        return;
+      }
       notify(error instanceof Error ? error.message : 'Uygulama başlatılamadı.', 'error');
       setAuth({ phase: desktopMode ? 'cloudflareSetup' : 'login' });
     }
   }, [desktopMode, notify]);
 
   useEffect(() => { void boot(); }, [boot]);
+  useEffect(() => {
+    if (!desktopMode) return;
+    const becameOnline = () => { setOnline(true); void boot(); };
+    const becameOffline = () => { setOnline(false); setAuth({ phase: 'offline' }); };
+    window.addEventListener('online', becameOnline);
+    window.addEventListener('offline', becameOffline);
+    return () => {
+      window.removeEventListener('online', becameOnline);
+      window.removeEventListener('offline', becameOffline);
+    };
+  }, [boot, desktopMode]);
   useEffect(() => {
     if (auth.phase !== 'ready') return;
     let disposed = false;
@@ -160,6 +181,7 @@ export function App() {
   if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>Güvenli panel hazırlanıyor…</p></Centered>{authToast}</>;
   if (auth.phase === 'cloudflareSetup') return <><AuthCard title="WPAI İlk Kurulum" description="Cloudflare hesabını bağlayın. Uygulama eksikleri güvenli sınırlar içinde kuracak, ilk yönetici hesabını oluşturacak ve gerçek Windows girişini doğrulayacak."><CloudflareSetupForm onReady={admin => setAuth({ phase: 'ready', admin })} onLogin={() => setAuth({ phase: 'login' })} notify={notify} /></AuthCard>{authToast}</>;
   if (auth.phase === 'setup') return <><AuthCard title="İlk Yönetici Kurulumu" description="Yönetici hesabınızı oluşturun. Kurulum bir kez tamamlandıktan sonra bu ekran kapanır."><SetupForm onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>{authToast}</>;
+  if (auth.phase === 'offline') return <><OfflineDesktopPage online={online} onRetry={() => void boot()} notify={notify} />{authToast}</>;
   if (auth.phase === 'login') return <><AuthCard title="WPAI Yönetim Paneli" description={desktopMode ? 'Güvenli Windows oturumuyla giriş yapın' : 'WhatsApp görüşmeleri ve kontrollü AI yönetimi'}><LoginForm desktopMode={desktopMode} onCloudflareSetup={desktopMode ? () => setAuth({ phase: 'cloudflareSetup' }) : undefined} onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>{authToast}</>;
 
   const brandInitial = (branding.app_name || 'W').trim().slice(0, 1).toUpperCase();
@@ -192,6 +214,23 @@ export function App() {
     </main>
     {toast && <div className={`toast ${toast.kind}`} role="status" aria-live="polite">{toast.message}</div>}
   </div>;
+}
+
+function OfflineDesktopPage({ online, onRetry, notify }: { online: boolean; onRetry: () => void; notify: Notify }) {
+  return <div className="offline-shell">
+    <header className="offline-header">
+      <div><span className="pill warn">Çevrimdışı</span><h1>Yerel Bilgi Modu</h1><p>Bulut verilerinin güncel olduğu iddia edilmez. Müşteri mesajı gönderme, kayıt değiştirme ve senkronizasyon işlemleri kapalıdır.</p></div>
+      <button className="button primary" disabled={!online} onClick={onRetry}>{online ? 'Buluta Yeniden Bağlan' : 'İnternet Bekleniyor'}</button>
+    </header>
+    <main className="offline-content"><DesktopIndexPanel notify={notify} offlineOnly /></main>
+  </div>;
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  if (error instanceof TypeError) return true;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes('failed to fetch') || message.includes('network') || message.includes('bağlantı') || message.includes('istek başarısız (0)');
 }
 
 const CLOUDFLARE_ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';

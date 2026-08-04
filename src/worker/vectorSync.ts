@@ -322,12 +322,28 @@ export async function vectorStatus(env: Env): Promise<{
   embeddingModel: string;
   dimensions: number;
   metric: 'cosine';
+  totalSources: number;
+  approvedKnowledge: number;
+  totalChunks: number;
   activeChunks: number;
   localArtifacts: number;
+  completedJobs: number;
   pendingJobs: number;
   failedJobs: number;
+  progressPercent: number;
+  estimatedEmbeddingTokens: number;
+  estimatedNeurons: number;
+  estimatedCostUsd: number;
+  pricingBasis: string;
+  estimatedRemainingSeconds: number | null;
+  lastSyncAt: string | null;
 }> {
-  const [chunks, artifacts, pending, failed] = await Promise.all([
+  const [sources, knowledge, allChunks, activeChunks, artifacts, completed, pending, failed, usage, timing] = await Promise.all([
+    first<{ count: number }>(env.DB,
+      "SELECT COUNT(*) AS count FROM knowledge_sources WHERE deleted_at IS NULL AND status<>'disabled'"),
+    first<{ count: number }>(env.DB,
+      "SELECT COUNT(*) AS count FROM business_knowledge WHERE status='approved' AND deleted_at IS NULL"),
+    first<{ count: number }>(env.DB, 'SELECT COUNT(*) AS count FROM knowledge_chunks'),
     first<{ count: number }>(env.DB,
       `SELECT COUNT(*) AS count FROM knowledge_chunks kc
         JOIN business_knowledge bk ON bk.id=kc.knowledge_id
@@ -336,20 +352,48 @@ export async function vectorStatus(env: Env): Promise<{
       `SELECT COUNT(*) AS count FROM knowledge_vector_artifacts a
         JOIN business_knowledge bk ON bk.id=a.knowledge_id
        WHERE bk.status='approved' AND bk.deleted_at IS NULL`),
+    first<{ count: number; last_sync_at: string | null }>(env.DB,
+      "SELECT COUNT(*) AS count,MAX(completed_at) AS last_sync_at FROM vector_sync_jobs WHERE status='completed'"),
     first<{ count: number }>(env.DB,
       "SELECT COUNT(*) AS count FROM vector_sync_jobs WHERE status IN ('queued','running')"),
     first<{ count: number }>(env.DB,
-      "SELECT COUNT(*) AS count FROM vector_sync_jobs WHERE status IN ('failed','dead_letter')")
+      "SELECT COUNT(*) AS count FROM vector_sync_jobs WHERE status IN ('failed','dead_letter')"),
+    first<{ input_tokens: number; neurons: number }>(env.DB,
+      `SELECT COALESCE(SUM(input_tokens),0) AS input_tokens,COALESCE(SUM(estimated_neurons),0) AS neurons
+         FROM ai_usage_records WHERE operation_type='embedding'`),
+    first<{ average_seconds: number | null }>(env.DB,
+      `SELECT AVG((julianday(completed_at)-julianday(started_at))*86400.0) AS average_seconds
+         FROM vector_sync_jobs
+        WHERE status='completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL`)
   ]);
+  const completedCount = completed?.count ?? 0;
+  const pendingCount = pending?.count ?? 0;
+  const failedCount = failed?.count ?? 0;
+  const allJobs = completedCount + pendingCount + failedCount;
+  const embeddingTokens = usage?.input_tokens ?? 0;
+  const averageSeconds = timing?.average_seconds;
   return {
     indexName: 'wa-ai-knowledge-prod',
     embeddingModel: env.DEFAULT_EMBEDDING_MODEL,
     dimensions: 1024,
     metric: 'cosine',
-    activeChunks: chunks?.count ?? 0,
+    totalSources: sources?.count ?? 0,
+    approvedKnowledge: knowledge?.count ?? 0,
+    totalChunks: allChunks?.count ?? 0,
+    activeChunks: activeChunks?.count ?? 0,
     localArtifacts: artifacts?.count ?? 0,
-    pendingJobs: pending?.count ?? 0,
-    failedJobs: failed?.count ?? 0
+    completedJobs: completedCount,
+    pendingJobs: pendingCount,
+    failedJobs: failedCount,
+    progressPercent: allJobs ? Math.round(completedCount * 10_000 / allJobs) / 100 : 100,
+    estimatedEmbeddingTokens: embeddingTokens,
+    estimatedNeurons: usage?.neurons ?? 0,
+    estimatedCostUsd: Math.round((embeddingTokens * 0.012 / 1_000_000) * 1_000_000) / 1_000_000,
+    pricingBasis: '@cf/baai/bge-m3 için yapılandırılmış $0.012 / 1M girdi tokenı referansı',
+    estimatedRemainingSeconds: pendingCount > 0 && averageSeconds != null && Number.isFinite(averageSeconds)
+      ? Math.max(1, Math.round(pendingCount * averageSeconds))
+      : null,
+    lastSyncAt: completed?.last_sync_at ?? null
   };
 }
 

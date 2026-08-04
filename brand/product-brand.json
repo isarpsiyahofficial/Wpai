@@ -1,0 +1,12 @@
+{
+  "productName": "WPAI",
+  "appName": "WPAI Yönetim Paneli",
+  "windowTitle": "WPAI - WhatsApp ve AI Yönetimi",
+  "identifier": "com.wpai.desktop",
+  "publisher": "WPAI",
+  "shortDescription": "WhatsApp müşteri görüşmeleri ve AI yönetimi",
+  "htmlDescription": "WhatsApp müşteri görüşmeleri ve yapay zekâ yönetim paneli",
+  "primaryColor": "#7657ff",
+  "secondaryColor": "#22c7e8",
+  "iconIco": "src-tauri/icons/icon.ico"
+}

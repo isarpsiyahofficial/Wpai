@@ -64,6 +64,7 @@ async function publicDesktopRequest<T>(path: string, payload?: unknown): Promise
 }
 
 export async function desktopLogin(email: string, password: string): Promise<DesktopSession> {
+  if (!navigator.onLine) throw new Error('Çevrimdışıyken bulut hesabına giriş yapılamaz.');
   if (!desktop.available()) throw new Error('Masaüstü oturumu yalnız Windows uygulamasında kullanılabilir.');
   const deviceId = await desktop.getOrCreateDeviceId();
   const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/login', {
@@ -71,7 +72,7 @@ export async function desktopLogin(email: string, password: string): Promise<Des
     password,
     deviceId,
     deviceName: navigator.userAgent.includes('Windows') ? 'WPAI Windows' : 'WPAI Desktop',
-    appVersion: '1.3.1'
+    appVersion: '1.3.2'
   });
   await desktop.saveRefreshToken(session.refreshToken);
   applyDesktopSession(session);
@@ -112,7 +113,19 @@ export async function desktopLogout(): Promise<void> {
   await desktop.removeRefreshToken().catch(() => undefined);
 }
 
+function isStateChanging(method: string | undefined): boolean {
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes((method ?? 'GET').toUpperCase());
+}
+
+function ensureDesktopOnline(path: string, init: RequestInit): void {
+  if (!navigator.onLine && isStateChanging(init.method)) {
+    throw new Error(`Çevrimdışıyken veri değiştirilemez veya mesaj gönderilemez (${path}).`);
+  }
+}
+
 async function desktopFetch(path: string, init: RequestInit, retry = true): Promise<Response> {
+  ensureDesktopOnline(path, init);
+  if (!navigator.onLine) throw new Error('Çevrimdışı modda yalnız yerel onaylı bilgi araması kullanılabilir.');
   if (!desktopAccessToken || desktopAccessExpiresAt <= Date.now() + 30_000) await restoreDesktopSession();
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${desktopAccessToken}`);

@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
+import unicodedata
 import sys
 import time
 from pathlib import Path
@@ -16,6 +18,7 @@ import numpy as np
 EXPECTED_DIMENSION = 1024
 MAX_VECTORS = 10_000
 MAX_METADATA_BYTES = 250_000
+TEXT_INDEX_VERSION = 1
 
 
 def emit(value: Any, code: int = 0) -> None:
@@ -93,6 +96,51 @@ def normalize(vectors: np.ndarray) -> np.ndarray:
     return value
 
 
+def searchable_text(value: dict[str, Any]) -> str:
+    parts = [
+        str(value.get("title", "")),
+        str(value.get("category", "")),
+        str(value.get("content", "")),
+    ]
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
+def text_vector(text: str) -> np.ndarray:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    words = re.findall(r"[0-9a-zçğıöşü]+", normalized, flags=re.IGNORECASE)
+    if not words:
+        raise ValueError("TEXT_QUERY_EMPTY")
+    vector = np.zeros(EXPECTED_DIMENSION, dtype="float32")
+
+    def add(feature: str, weight: float) -> None:
+        digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=8).digest()
+        number = int.from_bytes(digest, "little", signed=False)
+        index = number % EXPECTED_DIMENSION
+        vector[index] += weight if ((number >> 10) & 1) == 0 else -weight
+
+    for word in words:
+        add(f"w:{word}", 2.0)
+        padded = f"^{word}$"
+        for size in (3, 4, 5):
+            for offset in range(max(0, len(padded) - size + 1)):
+                add(f"c{size}:{padded[offset:offset + size]}", 0.35)
+    for left, right in zip(words, words[1:]):
+        add(f"b:{left}_{right}", 1.1)
+    return normalize(vector)[0]
+
+
+def build_text_index(ids: list[str], metadata: dict[str, dict[str, Any]]) -> np.ndarray:
+    if not ids:
+        return np.empty((0, EXPECTED_DIMENSION), dtype="float32")
+    rows = []
+    for item_id in ids:
+        text = searchable_text(metadata[item_id])
+        if not text:
+            text = item_id
+        rows.append(text_vector(text))
+    return np.vstack(rows).astype("float32")
+
+
 def checksum_payload(ids: list[str], vectors: np.ndarray, metadata: dict[str, dict[str, Any]]) -> str:
     digest = hashlib.sha256()
     for index, item_id in enumerate(ids):
@@ -114,10 +162,15 @@ def atomic_write(
     try:
         np.savez_compressed(temp_dir / "vectors.npz", ids=np.asarray(ids, dtype="U256"), vectors=vectors.astype("float32"))
         (temp_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")), "utf-8")
+        text_vectors = build_text_index(ids, metadata)
+        np.savez_compressed(temp_dir / "text-vectors.npz", ids=np.asarray(ids, dtype="U256"), vectors=text_vectors)
         if ids:
             index = faiss.IndexFlatIP(EXPECTED_DIMENSION)
             index.add(vectors)
             faiss.write_index(index, str(temp_dir / "index.faiss"))
+            text_index = faiss.IndexFlatIP(EXPECTED_DIMENSION)
+            text_index.add(text_vectors)
+            faiss.write_index(text_index, str(temp_dir / "text-index.faiss"))
         content_checksum = checksum_payload(ids, vectors, metadata) if ids else hashlib.sha256(b"").hexdigest()
         state = {
             "sourceChecksum": source_checksum,
@@ -125,9 +178,11 @@ def atomic_write(
             "dimension": EXPECTED_DIMENSION if ids else 0,
             "count": len(ids),
             "updatedAt": int(time.time()),
+            "textIndexVersion": TEXT_INDEX_VERSION,
+            "textSearchReady": bool(ids),
         }
         (temp_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":")), "utf-8")
-        for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss"):
+        for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss", "text-vectors.npz", "text-index.faiss"):
             source = temp_dir / name
             destination = db / name
             if source.exists():
@@ -165,7 +220,11 @@ def replace(db: Path, input_path: Path) -> None:
         raise ValueError("VECTOR_LIMIT_EXCEEDED")
     try:
         _, _, _, current = load_store(db)
-        if current.get("sourceChecksum") == source_checksum:
+        text_index_current = (
+            current.get("textIndexVersion") == TEXT_INDEX_VERSION
+            and (int(current.get("count", 0)) == 0 or (db / "text-index.faiss").is_file())
+        )
+        if current.get("sourceChecksum") == source_checksum and text_index_current:
             emit({"unchanged": True, **current})
     except ValueError:
         # A corrupt local cache is recoverable only through a complete verified replacement.
@@ -216,7 +275,7 @@ def delete(db: Path, input_path: Path) -> None:
 
 
 def clear(db: Path) -> None:
-    for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss"):
+    for name in ("vectors.npz", "metadata.json", "state.json", "index.faiss", "text-vectors.npz", "text-index.faiss"):
         path = db / name
         if path.exists():
             path.unlink()
@@ -232,6 +291,8 @@ def status(db: Path) -> None:
         "sourceChecksum": state.get("sourceChecksum"),
         "contentChecksum": state.get("contentChecksum"),
         "updatedAt": state.get("updatedAt"),
+        "textIndexVersion": state.get("textIndexVersion"),
+        "textSearchReady": bool(ids) and (db / "text-index.faiss").is_file(),
     })
 
 
@@ -262,6 +323,34 @@ def search(db: Path, input_path: Path) -> None:
     emit(result)
 
 
+def search_text(db: Path, input_path: Path) -> None:
+    raw = read_json(input_path)
+    query_text = raw.get("query") if isinstance(raw, dict) else None
+    if not isinstance(query_text, str) or not (2 <= len(query_text.strip()) <= 5000):
+        raise ValueError("TEXT_QUERY_INVALID")
+    ids, _, metadata, state = load_store(db)
+    if not ids:
+        emit([])
+    text_index_path = db / "text-index.faiss"
+    if state.get("textIndexVersion") != TEXT_INDEX_VERSION or not text_index_path.is_file():
+        raise ValueError("TEXT_INDEX_REBUILD_REQUIRED")
+    index = faiss.read_index(str(text_index_path))
+    if index.d != EXPECTED_DIMENSION or index.ntotal != len(ids):
+        raise ValueError("TEXT_INDEX_STATE_MISMATCH")
+    query = text_vector(query_text.strip()).reshape(1, -1)
+    top_k = max(1, min(20, int(raw.get("topK", 8))))
+    threshold = float(raw.get("threshold", 0.12))
+    if not np.isfinite(threshold) or threshold < -1.0 or threshold > 1.0:
+        raise ValueError("SEARCH_THRESHOLD_INVALID")
+    scores, positions = index.search(query, min(top_k, len(ids)))
+    result: list[dict[str, Any]] = []
+    for score, position in zip(scores[0].tolist(), positions[0].tolist()):
+        if 0 <= position < len(ids) and score >= threshold:
+            item_id = ids[position]
+            result.append({"id": item_id, "score": float(score), "metadata": metadata[item_id]})
+    emit(result)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="faiss-service")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -269,7 +358,7 @@ def main() -> None:
     for command in ("status", "clear"):
         item = sub.add_parser(command)
         item.add_argument("--db", required=True)
-    for command in ("replace", "upsert", "delete", "search"):
+    for command in ("replace", "upsert", "delete", "search", "search-text"):
         item = sub.add_parser(command)
         item.add_argument("--db", required=True)
         item.add_argument("--input", required=True)
@@ -284,6 +373,7 @@ def main() -> None:
         if args.command == "upsert": upsert(db, input_path)
         if args.command == "delete": delete(db, input_path)
         if args.command == "search": search(db, input_path)
+        if args.command == "search-text": search_text(db, input_path)
     except Exception as exc:
         sys.stderr.write(str(exc)[:500])
         raise SystemExit(1)

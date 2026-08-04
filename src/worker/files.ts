@@ -9,7 +9,11 @@ const allowed = new Map<string, string[]>([
   ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', ['504b0304']],
   ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ['504b0304']],
   ['text/csv', []],
-  ['text/plain', []]
+  ['text/plain', []],
+  ['audio/ogg', ['4f676753']],
+  ['audio/mpeg', ['494433', 'fffb', 'fff3', 'fff2']],
+  ['audio/mp4', ['66747970']],
+  ['video/mp4', ['66747970']]
 ]);
 
 function hex(bytes: Uint8Array): string { return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join(''); }
@@ -24,6 +28,7 @@ export function validateFileSignature(mime: string, bytes: Uint8Array): boolean 
   }
   const prefix = hex(bytes.slice(0, 16));
   if (mime === 'image/webp') return prefix.startsWith('52494646') && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP';
+  if (mime === 'audio/mp4' || mime === 'video/mp4') return hex(bytes.slice(4, 8)) === '66747970';
   return signatures.some(signature => prefix.startsWith(signature));
 }
 
@@ -52,6 +57,6 @@ export async function storeAttachment(
 }
 
 function safeExtension(name: string): string {
-  const match = name.toLowerCase().match(/\.(png|jpe?g|webp|pdf|docx|xlsx|csv|txt)$/);
+  const match = name.toLowerCase().match(/\.(png|jpe?g|webp|pdf|docx|xlsx|csv|txt|ogg|mp3|m4a|mp4)$/);
   return match ? match[0] : '';
 }

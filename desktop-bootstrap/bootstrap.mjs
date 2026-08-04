@@ -363,7 +363,7 @@ async function createOrVerifyAdmin(input, bootstrapToken, token) {
       password: input.adminPassword,
       deviceId,
       deviceName: 'WPAI Windows Kurulum Doğrulaması',
-      appVersion: '1.3.1'
+      appVersion: '1.3.2'
     })
   });
   if (!session?.accessToken || !session?.refreshToken || session.admin?.email !== input.adminEmail.trim().toLowerCase()) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { saveMetaCredentials } from '../../src/worker/meta';
 import { json, request, resetBusinessData, setupAdmin } from './helpers';
@@ -12,6 +12,7 @@ async function signature(body: string): Promise<string> {
 }
 
 beforeEach(async () => {
+  vi.unstubAllGlobals();
   await resetBusinessData();
   const admin = await setupAdmin();
   await saveMetaCredentials(env, {
@@ -58,4 +59,50 @@ describe('WhatsApp webhook', () => {
     expect(await good.text()).toBe('321');
     expect(bad.status).toBe(403);
   });
+  it('downloads inbound WhatsApp media into private R2 and links it to the scoped message', async () => {
+    const png = Uint8Array.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0,0,0,0,0]);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/v23.0/media-test-1')) {
+        return new Response(JSON.stringify({
+          url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=media-test-1',
+          mime_type: 'image/png', file_size: png.length
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.startsWith('https://lookaside.fbsbx.com/')) {
+        return new Response(png, { status: 200, headers: { 'Content-Type': 'image/png', 'Content-Length': String(png.length) } });
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const body = JSON.stringify({
+      entry: [{ changes: [{ value: {
+        contacts: [{ wa_id: '905321234568', profile: { name: 'Medya Test' } }],
+        messages: [{
+          id: 'wamid.media.1', from: '905321234568', timestamp: String(Math.floor(Date.now()/1000)),
+          type: 'image', image: { id: 'media-test-1', mime_type: 'image/png', caption: 'Logo örneği' }
+        }]
+      } }] }]
+    });
+    const response = await request('/webhooks/whatsapp', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': await signature(body) }, body
+    });
+    expect(response.status).toBe(200);
+    const message = await env.DB.prepare(
+      "SELECT conversation_id,contact_id,attachment_id,text_content FROM messages WHERE meta_message_id='wamid.media.1'"
+    ).first<{ conversation_id: string; contact_id: string; attachment_id: string; text_content: string }>();
+    expect(message?.text_content).toBe('Logo örneği');
+    expect(message?.attachment_id).toBeTruthy();
+    const attachment = await env.DB.prepare(
+      'SELECT conversation_id,contact_id,r2_key,mime_type,size_bytes,source,scan_status FROM attachments WHERE id=?'
+    ).bind(message!.attachment_id).first<{ conversation_id: string; contact_id: string; r2_key: string; mime_type: string; size_bytes: number; source: string; scan_status: string }>();
+    expect(attachment).toMatchObject({
+      conversation_id: message!.conversation_id, contact_id: message!.contact_id, mime_type: 'image/png',
+      size_bytes: png.length, source: 'customer', scan_status: 'clean'
+    });
+    expect(attachment?.r2_key.startsWith(`attachments/${message!.conversation_id}/`)).toBe(true);
+    expect(await env.FILES.get(attachment!.r2_key)).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
 });
