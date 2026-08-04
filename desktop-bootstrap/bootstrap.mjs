@@ -52,10 +52,7 @@ function validateInput(input) {
   if (input.action === 'setup') {
     if (typeof input.adminName !== 'string' || input.adminName.trim().length < 2 || input.adminName.length > 120) throw new Error('Yönetici adı geçersiz.');
     if (typeof input.adminEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.adminEmail) || input.adminEmail.length > 254) throw new Error('Yönetici e-postası geçersiz.');
-    if (typeof input.adminPassword !== 'string' || input.adminPassword.length < 12 || input.adminPassword.length > 256) throw new Error('Yönetici parolası en az 12 karakter olmalıdır.');
-    if (!/[a-zçğıöşü]/u.test(input.adminPassword) || !/[A-ZÇĞİÖŞÜ]/u.test(input.adminPassword) || !/\d/.test(input.adminPassword)) {
-      throw new Error('Yönetici parolası küçük harf, büyük harf ve rakam içermelidir.');
-    }
+    if (typeof input.adminPassword !== 'string' || input.adminPassword.length < 6 || input.adminPassword.length > 256) throw new Error('Yönetici parolası en az 6 karakter olmalıdır.');
   }
 }
 
@@ -274,19 +271,87 @@ async function waitForWorker() {
   throw new Error(`Cloudflare Worker sağlık kontrolü geçmedi: ${lastError}`);
 }
 
-async function createOrVerifyAdmin(input, bootstrapToken) {
-  const status = await workerRequest('/api/auth/setup-status');
-  if (status.required) {
-    await workerRequest('/api/auth/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: input.adminName.trim(),
-        email: input.adminEmail.trim().toLowerCase(),
-        password: input.adminPassword,
-        bootstrapToken
-      })
+function sqlLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function encodedPasswordHash(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256');
+  return `pbkdf2-sha256$310000$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+
+function provisionOwnerAccess(input, token) {
+  const { project, node, wrangler } = runtimePaths();
+  const env = commandEnvironment(token, path.dirname(node));
+  if (!fs.existsSync(wrangler)) throw new Error('Paketlenmiş Wrangler bulunamadı.');
+  const now = new Date().toISOString();
+  const email = input.adminEmail.trim().toLowerCase();
+  const name = input.adminName.trim();
+  const passwordHash = encodedPasswordHash(input.adminPassword);
+  const emailHash = crypto.createHash('sha256').update(email).digest('base64');
+  const adminId = crypto.randomUUID();
+  const sqlPath = path.join(project, `.wpai-owner-${crypto.randomUUID()}.sql`);
+  const sql = `
+PRAGMA foreign_keys = ON;
+INSERT INTO admins
+  (id, name, email, password_hash, role, status, failed_login_count, locked_until, created_at, updated_at, deleted_at)
+VALUES
+  (${sqlLiteral(adminId)}, ${sqlLiteral(name)}, ${sqlLiteral(email)}, ${sqlLiteral(passwordHash)}, 'owner', 'active', 0, NULL, ${sqlLiteral(now)}, ${sqlLiteral(now)}, NULL)
+ON CONFLICT(email) DO UPDATE SET
+  name = excluded.name,
+  password_hash = excluded.password_hash,
+  role = 'owner',
+  status = 'active',
+  failed_login_count = 0,
+  locked_until = NULL,
+  updated_at = excluded.updated_at,
+  deleted_at = NULL;
+UPDATE admins
+   SET status = 'disabled', deleted_at = COALESCE(deleted_at, ${sqlLiteral(now)}), updated_at = ${sqlLiteral(now)}
+ WHERE role = 'owner' AND email <> ${sqlLiteral(email)} AND deleted_at IS NULL;
+UPDATE admin_sessions SET revoked_at = ${sqlLiteral(now)} WHERE revoked_at IS NULL;
+UPDATE desktop_sessions SET revoked_at = ${sqlLiteral(now)} WHERE revoked_at IS NULL;
+UPDATE desktop_devices
+   SET status = 'active', revoked_at = NULL, last_seen_at = ${sqlLiteral(now)}
+ WHERE admin_id = (SELECT id FROM admins WHERE email = ${sqlLiteral(email)} LIMIT 1);
+DELETE FROM login_attempts WHERE email_hash = ${sqlLiteral(emailHash)};
+`;
+  fs.writeFileSync(sqlPath, sql, { mode: 0o600 });
+  try {
+    run(node, [wrangler, 'd1', 'execute', MANIFEST.d1, '--remote', '--file', sqlPath, '--experimental-provision=false', '--experimental-auto-create=false'], {
+      cwd: project, env, label: 'Yönetici hesabının oluşturulması veya güncellenmesi', timeout: 10 * 60_000
     });
+  } finally {
+    fs.rmSync(sqlPath, { force: true });
+  }
+}
+
+async function createOrVerifyAdmin(input, bootstrapToken, token) {
+  const status = await workerRequest('/api/auth/setup-status');
+  let created = false;
+  let reconfigured = false;
+  if (status.required) {
+    try {
+      await workerRequest('/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: input.adminName.trim(),
+          email: input.adminEmail.trim().toLowerCase(),
+          password: input.adminPassword,
+          bootstrapToken
+        })
+      });
+      created = true;
+    } catch (error) {
+      if (!safeError(error).startsWith('SETUP_CLOSED:')) throw error;
+      provisionOwnerAccess(input, token);
+      reconfigured = true;
+    }
+  } else {
+    provisionOwnerAccess(input, token);
+    reconfigured = true;
   }
 
   const deviceId = `wpai-bootstrap-${crypto.randomBytes(24).toString('hex')}`;
@@ -298,7 +363,7 @@ async function createOrVerifyAdmin(input, bootstrapToken) {
       password: input.adminPassword,
       deviceId,
       deviceName: 'WPAI Windows Kurulum Doğrulaması',
-      appVersion: '1.3.0'
+      appVersion: '1.3.1'
     })
   });
   if (!session?.accessToken || !session?.refreshToken || session.admin?.email !== input.adminEmail.trim().toLowerCase()) {
@@ -309,7 +374,7 @@ async function createOrVerifyAdmin(input, bootstrapToken) {
     headers: { 'Content-Type': 'application/json', Origin: 'https://tauri.localhost' },
     body: JSON.stringify({ refreshToken: session.refreshToken, deviceId })
   });
-  return { id: session.admin.id, name: session.admin.name, email: session.admin.email, role: session.admin.role, created: status.required };
+  return { id: session.admin.id, name: session.admin.name, email: session.admin.email, role: session.admin.role, created, reconfigured };
 }
 
 async function main() {
@@ -339,7 +404,12 @@ async function main() {
     const requiredAfterRepair = afterResources.components.filter(item => item.key !== 'worker' && item.status !== 'ready');
     if (requiredAfterRepair.length) throw new Error(`Cloudflare kaynak kurulumu tamamlanamadı: ${requiredAfterRepair.map(item => item.label).join(', ')}`);
 
-    const generatedSecrets = {
+    let existingInstallation = false;
+    try {
+      const currentSetup = await workerRequest('/api/auth/setup-status');
+      existingInstallation = currentSetup.required === false;
+    } catch { /* Worker may not exist before the first installation. */ }
+    const generatedSecrets = existingInstallation ? {} : {
       SESSION_SIGNING_KEY: crypto.randomBytes(48).toString('base64url'),
       DATA_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'),
       ADMIN_BOOTSTRAP_TOKEN: crypto.randomBytes(48).toString('base64url')
@@ -347,7 +417,7 @@ async function main() {
     secretsToRedact.push(...Object.values(generatedSecrets));
     installAndDeploy(input.apiToken, generatedSecrets);
     await waitForWorker();
-    const admin = await createOrVerifyAdmin(input, generatedSecrets.ADMIN_BOOTSTRAP_TOKEN);
+    const admin = await createOrVerifyAdmin(input, generatedSecrets.ADMIN_BOOTSTRAP_TOKEN ?? '', input.apiToken);
     const finalReport = await scan(input.apiToken);
     output({
       ok: true,

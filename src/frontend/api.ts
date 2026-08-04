@@ -71,7 +71,7 @@ export async function desktopLogin(email: string, password: string): Promise<Des
     password,
     deviceId,
     deviceName: navigator.userAgent.includes('Windows') ? 'WPAI Windows' : 'WPAI Desktop',
-    appVersion: '1.3.0'
+    appVersion: '1.3.1'
   });
   await desktop.saveRefreshToken(session.refreshToken);
   applyDesktopSession(session);

@@ -21,6 +21,7 @@ describe('API contracts', () => {
 
   it('enforces strong setup and message boundaries', () => {
     expect(() => SetupAdminSchema.parse({ name: 'A', email: 'bad', password: 'short', bootstrapToken: 'x' })).toThrow();
+    expect(SetupAdminSchema.parse({ name: 'İbrahim', email: 'owner@example.com', password: '123456', bootstrapToken: 'x'.repeat(24) }).password).toBe('123456');
     expect(() => ManualMessageSchema.parse({ conversationId: 'not-a-uuid', text: '', clientRequestId: 'bad' })).toThrow();
     expect(ManualMessageSchema.parse({ conversationId: crypto.randomUUID(), text: 'Merhaba', clientRequestId: crypto.randomUUID() }).text).toBe('Merhaba');
   });

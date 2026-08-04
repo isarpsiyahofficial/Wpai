@@ -21,7 +21,7 @@ describe('administrator authentication', () => {
     expect((await request('/api/dashboard')).status).toBe(401);
     const noCsrf = await request('/api/auth/change-password', {
       method: 'POST', headers: { Cookie: auth.cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ currentPassword: TEST_PASSWORD, newPassword: 'YeniGüvenliParola456', revokeOtherSessions: true })
+      body: JSON.stringify({ currentPassword: TEST_PASSWORD, newPassword: '654321', revokeOtherSessions: true })
     });
     expect(noCsrf.status).toBe(403);
   });
@@ -49,13 +49,13 @@ describe('administrator authentication', () => {
 
     const changed = await request('/api/auth/change-password', {
       method: 'POST', headers: authHeaders(auth),
-      body: JSON.stringify({ currentPassword: TEST_PASSWORD, newPassword: 'YeniGüvenliParola456', revokeOtherSessions: true })
+      body: JSON.stringify({ currentPassword: TEST_PASSWORD, newPassword: '654321', revokeOtherSessions: true })
     });
     expect(changed.status).toBe(200);
     expect((await request('/api/auth/me', { headers: { Cookie: secondCookie } })).status).toBe(401);
 
     const oldLogin = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }) });
-    const newLogin = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: TEST_EMAIL, password: 'YeniGüvenliParola456' }) });
+    const newLogin = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: TEST_EMAIL, password: '654321' }) });
     expect(oldLogin.status).toBe(401);
     expect(newLogin.status).toBe(200);
 

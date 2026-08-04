@@ -94,9 +94,6 @@ export async function decryptSecret(encoded: string, secret: string): Promise<st
 
 export function passwordPolicy(password: string): string[] {
   const errors: string[] = [];
-  if (password.length < 12) errors.push('Parola en az 12 karakter olmalıdır.');
-  if (!/[a-zçğıöşü]/u.test(password)) errors.push('En az bir küçük harf gereklidir.');
-  if (!/[A-ZÇĞİÖŞÜ]/u.test(password)) errors.push('En az bir büyük harf gereklidir.');
-  if (!/\d/.test(password)) errors.push('En az bir rakam gereklidir.');
+  if (password.length < 6) errors.push('Parola en az 6 karakter olmalıdır.');
   return errors;
 }
