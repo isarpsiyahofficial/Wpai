@@ -1,0 +1,128 @@
+name: WPAI One-shot Native Desktop Completion
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - '.github/workflows/one-shot-native-desktop.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  complete:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+      - name: Add official Tauri native capabilities
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          cargo = Path('src-tauri/Cargo.toml')
+          cargo_text = cargo.read_text('utf-8')
+          anchor = 'tauri-plugin-shell = "2.3.3"\n'
+          additions = (
+              'tauri-plugin-shell = "2.3.3"\n'
+              'tauri-plugin-single-instance = "2"\n'
+              'tauri-plugin-dialog = "2"\n'
+              'tauri-plugin-notification = "2"\n'
+          )
+          if cargo_text.count(anchor) != 1:
+              raise SystemExit('CARGO_PLUGIN_ANCHOR_NOT_UNIQUE')
+          cargo.write_text(cargo_text.replace(anchor, additions), 'utf-8')
+
+          lib = Path('src-tauri/src/lib.rs')
+          text = lib.read_text('utf-8')
+          import_anchor = 'use tauri_plugin_shell::ShellExt;\n'
+          import_replacement = (
+              'use tauri_plugin_dialog::{DialogExt, FilePath};\n'
+              'use tauri_plugin_notification::NotificationExt;\n'
+              'use tauri_plugin_shell::ShellExt;\n'
+          )
+          if text.count(import_anchor) != 1:
+              raise SystemExit('LIB_IMPORT_ANCHOR_NOT_UNIQUE')
+          text = text.replace(import_anchor, import_replacement)
+
+          struct_anchor = '#[derive(Debug, Serialize, Deserialize)]\n#[serde(rename_all = "camelCase")]\nstruct FaissMatch {\n    id: String,\n    score: f32,\n    metadata: Value,\n}\n'
+          struct_replacement = struct_anchor + '''\n#[derive(Debug, Serialize)]\n#[serde(rename_all = "camelCase")]\nstruct PickedDesktopFile {\n    name: String,\n    mime_type: String,\n    bytes: Vec<u8>,\n}\n'''
+          if text.count(struct_anchor) != 1:
+              raise SystemExit('STRUCT_ANCHOR_NOT_UNIQUE')
+          text = text.replace(struct_anchor, struct_replacement)
+
+          command_anchor = '#[tauri::command]\nfn show_main_window(app: AppHandle) -> Result<(), String> {'
+          native_commands = '''#[tauri::command]\nasync fn pick_desktop_file(app: AppHandle) -> Result<Option<PickedDesktopFile>, String> {\n    let selected = app\n        .dialog()\n        .file()\n        .add_filter(\n            "WPAI desteklenen dosyalar",\n            &["png", "jpg", "jpeg", "webp", "pdf", "docx", "xlsx", "csv", "txt"],\n        )\n        .blocking_pick_file();\n    let Some(selected) = selected else { return Ok(None); };\n    let path = match selected {\n        FilePath::Path(path) => path,\n        FilePath::Url(url) => url\n            .to_file_path()\n            .map_err(|_| "Seçilen dosya yolu okunamadı.".to_string())?,\n    };\n    let metadata = fs::metadata(&path).map_err(|_| "Seçilen dosya bilgisi okunamadı.".to_string())?;\n    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 25 * 1024 * 1024 {\n        return Err("Dosya boş olamaz ve 25 MB sınırını aşamaz.".into());\n    }\n    let extension = path\n        .extension()\n        .and_then(|value| value.to_str())\n        .unwrap_or_default()\n        .to_ascii_lowercase();\n    let mime_type = match extension.as_str() {\n        "png" => "image/png",\n        "jpg" | "jpeg" => "image/jpeg",\n        "webp" => "image/webp",\n        "pdf" => "application/pdf",\n        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",\n        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",\n        "csv" => "text/csv",\n        "txt" => "text/plain",\n        _ => return Err("Bu dosya türü desteklenmiyor.".into()),\n    };\n    let bytes = fs::read(&path).map_err(|_| "Seçilen dosya okunamadı.".to_string())?;\n    let name = path\n        .file_name()\n        .and_then(|value| value.to_str())\n        .unwrap_or("wpai-dosya")\n        .chars()\n        .take(180)\n        .collect();\n    Ok(Some(PickedDesktopFile { name, mime_type: mime_type.into(), bytes }))\n}\n\n#[tauri::command(rename_all = "camelCase")]\nfn show_desktop_notification(app: AppHandle, title: String, body: String) -> Result<(), String> {\n    let title = title.trim();\n    let body = body.trim();\n    if title.is_empty() || title.chars().count() > 100 || body.is_empty() || body.chars().count() > 500 {\n        return Err("Bildirim başlığı veya içeriği geçersiz.".into());\n    }\n    app\n        .notification()\n        .builder()\n        .title(title)\n        .body(body)\n        .show()\n        .map_err(|_| "Windows bildirimi gösterilemedi.".to_string())\n}\n\n''' + command_anchor
+          if text.count(command_anchor) != 1:
+              raise SystemExit('NATIVE_COMMAND_ANCHOR_NOT_UNIQUE')
+          text = text.replace(command_anchor, native_commands)
+
+          builder_anchor = '    tauri::Builder::default()\n        .manage(Mutex::new(DesktopPreferences::default()))\n        .plugin(tauri_plugin_shell::init())\n'
+          builder_replacement = '''    tauri::Builder::default()\n        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {\n            if let Some(window) = app.get_webview_window("main") {\n                let _ = window.show();\n                let _ = window.unminimize();\n                let _ = window.set_focus();\n            }\n        }))\n        .manage(Mutex::new(DesktopPreferences::default()))\n        .plugin(tauri_plugin_shell::init())\n        .plugin(tauri_plugin_dialog::init())\n        .plugin(tauri_plugin_notification::init())\n'''
+          if text.count(builder_anchor) != 1:
+              raise SystemExit('BUILDER_ANCHOR_NOT_UNIQUE')
+          text = text.replace(builder_anchor, builder_replacement)
+
+          handler_anchor = '            set_windows_autostart,\n            show_main_window,\n'
+          handler_replacement = '            set_windows_autostart,\n            pick_desktop_file,\n            show_desktop_notification,\n            show_main_window,\n'
+          if text.count(handler_anchor) != 1:
+              raise SystemExit('HANDLER_ANCHOR_NOT_UNIQUE')
+          text = text.replace(handler_anchor, handler_replacement)
+
+          test_anchor = '        assert!(permissions.contains("save_desktop_refresh_token"));\n'
+          test_replacement = (
+              '        assert!(permissions.contains("save_desktop_refresh_token"));\n'
+              '        assert!(permissions.contains("pick_desktop_file"));\n'
+              '        assert!(permissions.contains("show_desktop_notification"));\n'
+              '        let source = include_str!("lib.rs");\n'
+              '        assert!(source.contains("tauri_plugin_single_instance::init"));\n'
+              '        assert!(source.contains("tauri_plugin_dialog::init"));\n'
+              '        assert!(source.contains("tauri_plugin_notification::init"));\n'
+          )
+          if text.count(test_anchor) != 1:
+              raise SystemExit('TEST_ANCHOR_NOT_UNIQUE')
+          text = text.replace(test_anchor, test_replacement)
+          lib.write_text(text, 'utf-8')
+
+          permissions = Path('src-tauri/permissions/default.toml')
+          permissions_text = permissions.read_text('utf-8')
+          permissions_anchor = '  "set_windows_autostart",\n  "show_main_window",\n'
+          permissions_replacement = '  "set_windows_autostart",\n  "pick_desktop_file",\n  "show_desktop_notification",\n  "show_main_window",\n'
+          if permissions_text.count(permissions_anchor) != 1:
+              raise SystemExit('PERMISSION_ANCHOR_NOT_UNIQUE')
+          permissions.write_text(permissions_text.replace(permissions_anchor, permissions_replacement), 'utf-8')
+
+          desktop = Path('src/frontend/desktop.ts')
+          desktop_text = desktop.read_text('utf-8')
+          desktop_anchor = '  showMainWindow(): Promise<void> {\n    return requiredInvoke<void>(\'show_main_window\');\n  },\n'
+          desktop_replacement = '''  pickFile(): Promise<{ name: string; mimeType: string; bytes: number[] } | null> {\n    return requiredInvoke<{ name: string; mimeType: string; bytes: number[] } | null>('pick_desktop_file');\n  },\n  notify(title: string, body: string): Promise<void> {\n    return requiredInvoke<void>('show_desktop_notification', { title, body });\n  },\n''' + desktop_anchor
+          if desktop_text.count(desktop_anchor) != 1:
+              raise SystemExit('DESKTOP_ANCHOR_NOT_UNIQUE')
+          desktop.write_text(desktop_text.replace(desktop_anchor, desktop_replacement), 'utf-8')
+          '@ | python -
+      - name: Generate deterministic Cargo lock
+        shell: pwsh
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - name: Verify Rust native capabilities
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+          cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Commit native completion and remove one-shot workflow
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/one-shot-native-desktop.yml
+          git config user.name 'WPAI Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/lib.rs src-tauri/permissions/default.toml src/frontend/desktop.ts .github/workflows/one-shot-native-desktop.yml
+          git commit -m 'Complete native desktop capabilities'
+          git push origin HEAD:agent/wpai-production-rebuild
