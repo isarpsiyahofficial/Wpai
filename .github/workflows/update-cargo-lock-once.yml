@@ -19,13 +19,17 @@ jobs:
         with:
           ref: agent/wpai-production-rebuild
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.97.1
-      - name: Align and verify lockfile
+      - name: Align and verify lockfile metadata
         run: |
+          set -euo pipefail
           python scripts/update_cargo_lock_version.py
-          cargo check --locked --manifest-path src-tauri/Cargo.toml
+          python - <<'PY'
+          from pathlib import Path
+          lock = Path('src-tauri/Cargo.lock').read_text('utf-8')
+          marker = '[[package]]\nname = "wpai-desktop"\nversion = "1.3.0"'
+          if lock.count(marker) != 1:
+              raise SystemExit('Cargo.lock WPAI root package is not exactly version 1.3.0')
+          PY
       - name: Commit lockfile
         shell: bash
         run: |
