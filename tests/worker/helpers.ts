@@ -36,12 +36,60 @@ export function authHeaders(auth: { cookie: string; csrf: string }, jsonContent 
 
 export async function resetBusinessData(): Promise<void> {
   const tables = [
-    'admin_ai_messages','admin_ai_threads','infrastructure_snapshots','integration_credentials','webhook_events','audit_logs',
-    'follow_up_tasks','admin_notifications','human_handoffs','ai_usage_records','ai_jobs','opt_outs','campaign_recipients','campaigns',
-    'message_status_events','messages','knowledge_chunks','business_knowledge','pricing_rules','service_catalog','customer_requirements',
-    'customer_notes','conversation_summaries','attachments','conversations','contact_tags','tags','contacts','login_attempts','admin_sessions','admins'
+    'source_knowledge_links',
+    'knowledge_vector_artifacts',
+    'vector_sync_jobs',
+    'retrieval_logs',
+    'training_item_publications',
+    'knowledge_versions',
+    'knowledge_source_extractions',
+    'knowledge_sources',
+    'ai_training_items',
+    'ai_training_thread_state',
+    'admin_ai_messages',
+    'admin_ai_threads',
+    'desktop_sessions',
+    'desktop_devices',
+    'csv_import_rows',
+    'csv_imports',
+    'dead_letter_jobs',
+    'canned_replies',
+    'infrastructure_snapshots',
+    'integration_credentials',
+    'webhook_events',
+    'audit_logs',
+    'follow_up_tasks',
+    'admin_notifications',
+    'human_handoffs',
+    'ai_decisions',
+    'ai_usage_records',
+    'ai_jobs',
+    'opt_outs',
+    'campaign_recipients',
+    'campaigns',
+    'message_status_events',
+    'messages',
+    'message_templates',
+    'knowledge_chunks',
+    'business_knowledge',
+    'pricing_rules',
+    'service_catalog',
+    'customer_requirements',
+    'customer_notes',
+    'conversation_summaries',
+    'attachments',
+    'conversations',
+    'contact_tags',
+    'tags',
+    'contacts',
+    'login_attempts',
+    'admin_sessions',
+    'admins'
   ];
   for (const table of tables) await env.DB.prepare(`DELETE FROM ${table}`).run();
   await env.DB.prepare("UPDATE system_settings SET value_json='\"off\"' WHERE key='ai_global_mode'").run();
   await env.DB.prepare("UPDATE system_settings SET value_json='false' WHERE key='ai_auto_reply_enabled'").run();
+  await env.DB.prepare("UPDATE system_settings SET value_json='true' WHERE key='ai_suggestion_mode'").run();
+  await env.DB.prepare("UPDATE system_settings SET value_json='false' WHERE key='meta_connection_enabled'").run();
+  await env.DB.prepare("UPDATE system_settings SET value_json='false' WHERE key='admin_notifications_enabled'").run();
 }
