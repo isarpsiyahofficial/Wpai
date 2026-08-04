@@ -28,7 +28,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply deterministic fix
-        run: python scripts/apply_login_reliability_patch.py
+        run: |
+          python scripts/prepare_login_patch.py
+          python scripts/apply_login_reliability_patch.py
       - name: Validate source and Worker behavior
         run: |
           set -euo pipefail
