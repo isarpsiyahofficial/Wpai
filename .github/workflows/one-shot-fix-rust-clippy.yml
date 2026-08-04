@@ -1,0 +1,41 @@
+name: WPAI One-shot Rust Clippy Fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-fix-rust-clippy.yml'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Remove unused Rust import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/lib.rs')
+          text = path.read_text('utf-8')
+          old = '    path::{Path, PathBuf},\n'
+          new = '    path::PathBuf,\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'RUST_IMPORT_ANCHOR_COUNT_{text.count(old)}')
+          path.write_text(text.replace(old, new), 'utf-8')
+          PY
+      - name: Commit source fix
+        run: |
+          git config user.name 'WPAI Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src-tauri/src/lib.rs
+          git commit -m 'Remove unused Rust path import'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
