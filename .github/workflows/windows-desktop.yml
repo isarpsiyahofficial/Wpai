@@ -103,7 +103,7 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: npm run desktop:build
-      - name: Real NSIS install, open, single-instance and uninstall smoke
+      - name: Real NSIS install, GUI subsystem, open, single-instance and uninstall smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -164,6 +164,14 @@ jobs:
             throw "Installed application executable was not found in $installLocation"
           }
 
+          $peBytes = [System.IO.File]::ReadAllBytes($installed.FullName)
+          if ($peBytes.Length -lt 512) { throw 'Installed application PE image is unexpectedly small' }
+          $peOffset = [BitConverter]::ToInt32($peBytes, 0x3c)
+          if ($peOffset -lt 0 -or ($peOffset + 96) -ge $peBytes.Length) { throw 'Installed application PE header is invalid' }
+          $optionalHeaderOffset = $peOffset + 24
+          $peSubsystem = [BitConverter]::ToUInt16($peBytes, $optionalHeaderOffset + 68)
+          if ($peSubsystem -ne 2) { throw "Installed application is not Windows GUI subsystem; subsystem=$peSubsystem" }
+
           $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $bootstrapNode = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
@@ -214,6 +222,8 @@ jobs:
             registryDisplayIcon = [string]$entry.DisplayIcon
             installLocation = $installLocation
             installedExe = $installed.FullName
+            peSubsystem = $peSubsystem
+            peSubsystemName = 'Windows GUI'
             cloudflareBootstrapScript = $bootstrapScript.FullName
             cloudflareBootstrapNode = $bootstrapNode.FullName
             cloudflareBootstrapProject = $bootstrapProject.FullName
