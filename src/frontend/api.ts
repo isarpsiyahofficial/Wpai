@@ -51,14 +51,16 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 async function publicDesktopRequest<T>(path: string, payload?: unknown): Promise<T> {
-  const response = await fetch(apiUrl(path), {
+  const init: RequestInit = {
     method: payload === undefined ? 'GET' : 'POST',
-    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
     credentials: 'omit',
     cache: 'no-store'
-  });
-  return parseJson<T>(response);
+  };
+  if (payload !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(payload);
+  }
+  return parseJson<T>(await fetch(apiUrl(path), init));
 }
 
 export async function desktopLogin(email: string, password: string): Promise<DesktopSession> {
