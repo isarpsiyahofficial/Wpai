@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-spec500-pr.yml'
+      - 'scripts/apply_spec500.py'
 
 permissions:
   contents: write
@@ -28,6 +29,18 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: x86_64-pc-windows-msvc
+      - name: Normalize current App import anchor
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('scripts/apply_spec500.py')
+          text = path.read_text('utf-8')
+          text = text.replace(
+              "import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';",
+              "import { AiPage, ContactsPage, DashboardPage, DesktopIndexPanel, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';"
+          )
+          path.write_text(text, 'utf-8')
+          '@ | python -
       - name: Apply exact native and verification patch
         run: python scripts/apply_spec500.py
       - name: Regenerate deterministic locks
