@@ -4,8 +4,36 @@ import { request, resetBusinessData } from './helpers';
 beforeEach(async()=>{await resetBusinessData();});
 
 describe('health, security headers and routing',()=>{
-  it('reports every mandatory binding and safe Meta configuration state',async()=>{
-    const response=await request('/health');expect(response.status).toBe(200);const body=await response.json<any>();expect(body).toEqual({ok:true,components:{worker:true,d1:true,r2Binding:true,queuesBinding:true,workersAiBinding:true,vectorizeBinding:true,metaConfiguration:'not_configured'}});
+  it('reports every mandatory binding, Vectorize details and safe Meta configuration state',async()=>{
+    const response=await request('/health');
+    expect(response.status).toBe(200);
+    const body=await response.json<any>();
+    expect(body).toMatchObject({
+      ok:true,
+      deep:false,
+      components:{
+        worker:true,
+        d1:true,
+        r2Binding:true,
+        r2Operational:null,
+        queuesBinding:true,
+        workersAiBinding:true,
+        vectorizeBinding:true,
+        vectorizeOperational:null,
+        metaConfiguration:'not_configured',
+        vectorize:{
+          indexName:'wa-ai-knowledge-prod',
+          embeddingModel:'@cf/baai/bge-m3',
+          dimensions:1024,
+          metric:'cosine',
+          activeChunks:0,
+          localArtifacts:0,
+          pendingJobs:0,
+          failedJobs:0
+        }
+      }
+    });
+    expect(Date.parse(body.checkedAt)).not.toBeNaN();
   });
 
   it('adds browser security headers to API errors and does not expose stack traces',async()=>{
