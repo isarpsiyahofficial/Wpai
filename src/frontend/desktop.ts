@@ -64,6 +64,21 @@ export const desktop = {
   quit(): Promise<void> {
     return requiredInvoke<void>('quit_application');
   },
+  cloudflareConnectionStatus(): Promise<{ configured: boolean; accountId: string; storage: string }> {
+    return requiredInvoke('cloudflare_connection_status');
+  },
+  cloudflareScan(accountId: string, apiToken?: string): Promise<Record<string, unknown>> {
+    return requiredInvoke('cloudflare_scan', { accountId, apiToken: apiToken || null });
+  },
+  cloudflareRepair(accountId: string, actions: string[], apiToken?: string): Promise<Record<string, unknown>> {
+    return requiredInvoke('cloudflare_repair', { accountId, actions, apiToken: apiToken || null });
+  },
+  cloudflareSetup(input: { accountId: string; apiToken: string; adminName: string; adminEmail: string; adminPassword: string }): Promise<Record<string, unknown>> {
+    return requiredInvoke('cloudflare_setup', input);
+  },
+  cloudflareForget(): Promise<{ forgotten: boolean; accountId: string }> {
+    return requiredInvoke('cloudflare_forget');
+  },
   faissHealth(): Promise<Record<string, unknown>> {
     return requiredInvoke<Record<string, unknown>>('faiss_health');
   },

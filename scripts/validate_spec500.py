@@ -26,7 +26,11 @@ def main() -> None:
         raise AssertionError("package-lock.json does not contain patched Undici 7.29.0")
 
     require("src-tauri/Cargo.toml", "tauri-plugin-single-instance", "tauri-plugin-dialog", "tauri-plugin-notification")
-    require("src-tauri/src/lib.rs", "tauri_plugin_single_instance::init", "pick_desktop_file", "show_desktop_notification", "faiss_replace")
+    require("src-tauri/src/lib.rs", "tauri_plugin_single_instance::init", "pick_desktop_file", "show_desktop_notification", "faiss_replace", "mod cloudflare")
+    require("src-tauri/src/cloudflare.rs", "cloudflare_setup", "cloudflare_scan", "cloudflare_repair", "Windows Credential Manager")
+    require("desktop-bootstrap/bootstrap.mjs", "D1_BLOCKED", "installAndDeploy", "createOrVerifyAdmin")
+    require("src/frontend/App.tsx", "CloudflareSetupForm", "Cloudflare’ı Bağla, Eksikleri Kur ve Giriş Yap")
+    require("src/frontend/pages/settings.tsx", "desktop.cloudflareScan", "desktop.cloudflareRepair", "desktop.cloudflareForget")
     require("src/frontend/pages/whatsapp.tsx", "desktop.pickFile()")
     require("src/frontend/App.tsx", "desktop.notify(")
     require("tests/worker/training-vector.test.ts", "wrong-customer vectors", "prompt injection", "duplicate: true")
@@ -38,11 +42,15 @@ def main() -> None:
         ".github/workflows/windows-desktop.yml",
         "Real NSIS install, open, single-instance and uninstall smoke",
         "windows-smoke.json",
+        "Prepare packaged Cloudflare bootstrap runtime",
+        "cloudflareBootstrapScript",
     )
 
     tauri = json.loads(text("src-tauri/tauri.conf.json"))
     if tauri["build"]["frontendDist"] != "../dist/web":
         raise AssertionError("Windows app must package the React build")
+    if tauri.get("bundle", {}).get("resources", {}).get("../desktop-bootstrap/") != "cloudflare-bootstrap/":
+        raise AssertionError("Windows app must package the local Cloudflare bootstrap runtime")
     for window in tauri["app"]["windows"]:
         if "workers.dev" in str(window.get("url", "")):
             raise AssertionError("Windows shell must not load a remote site")

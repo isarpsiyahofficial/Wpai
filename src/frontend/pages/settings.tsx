@@ -70,7 +70,6 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
 
   async function saveMeta(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isDesktop) return;
     const form = event.currentTarget;
     setBusy(true);
     try {
@@ -102,7 +101,7 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
   }
 
   async function removeMeta() {
-    if (isDesktop || !window.confirm('Kayıtlı Meta bilgileri kalıcı olarak silinsin mi?')) return;
+    if (!window.confirm('Kayıtlı Meta bilgileri kalıcı olarak silinsin mi?')) return;
     try {
       await api('/api/meta/credentials', { method: 'DELETE' });
       load();
@@ -111,32 +110,42 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
   }
 
   async function scan() {
-    if (isDesktop) { notify('Cloudflare yönetim tokeni Windows uygulamasında kabul edilmez. Bu işlem web yönetim panelinden yapılmalıdır.', 'info'); return; }
-    if (!token) { notify('Cloudflare API tokeni gerekli.', 'error'); return; }
+    if (!isDesktop && !token) { notify('Cloudflare API tokeni gerekli.', 'error'); return; }
     setBusy(true);
     try {
-      const result = await api<InfraReport>('/api/cloudflare/scan', {
-        method: 'POST', ...jsonBody({ accountId: ACCOUNT_ID, apiToken: token })
-      });
-      setInfra(result);
-      notify(result.overall === 'ready' ? 'Cloudflare altyapısı hazır.' : 'Eksik veya yanlış ayarlar bulundu.', result.overall === 'ready' ? 'success' : 'info');
+      const result = isDesktop
+        ? await desktop.cloudflareScan(ACCOUNT_ID, token || undefined) as unknown as { report: InfraReport }
+        : { report: await api<InfraReport>('/api/cloudflare/scan', { method: 'POST', ...jsonBody({ accountId: ACCOUNT_ID, apiToken: token }) }) };
+      setInfra(result.report);
+      if (isDesktop && token) setToken('');
+      notify(result.report.overall === 'ready' ? 'Cloudflare altyapısı hazır.' : 'Eksik veya yanlış ayarlar bulundu.', result.report.overall === 'ready' ? 'success' : 'info');
     } catch (error) { notify(error instanceof Error ? error.message : 'Tarama başarısız.', 'error'); }
     finally { setBusy(false); }
   }
 
   async function repair() {
-    if (isDesktop || !infra || !token) return;
+    if (!infra) return;
     const actions = infra.components.filter(item => item.status === 'missing' && item.repairable).map(item => item.key);
-    if (!actions.length) { notify('Yalnız wa-ai-knowledge-prod veya wa-knowledge-index için güvenli oluşturma işi yok.', 'info'); return; }
+    if (!actions.length) { notify('Güvenli biçimde oluşturulabilecek eksik Cloudflare bileşeni yok.', 'info'); return; }
     setBusy(true);
     try {
-      const result = await api<{ report: InfraReport; applied: string[]; skipped: string[] }>('/api/cloudflare/repair', {
-        method: 'POST', ...jsonBody({ accountId: ACCOUNT_ID, apiToken: token, actions })
-      });
+      const result = isDesktop
+        ? await desktop.cloudflareRepair(ACCOUNT_ID, actions, token || undefined) as unknown as { report: InfraReport; applied: string[]; skipped: string[] }
+        : await api<{ report: InfraReport; applied: string[]; skipped: string[] }>('/api/cloudflare/repair', { method: 'POST', ...jsonBody({ accountId: ACCOUNT_ID, apiToken: token, actions }) });
       setInfra(result.report);
+      if (isDesktop && token) setToken('');
       notify(`${result.applied.length} izinli Cloudflare bileşeni oluşturuldu.`, 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'Onarım tamamlanamadı.', 'error'); }
     finally { setBusy(false); }
+  }
+
+  async function forgetCloudflare() {
+    if (!isDesktop || !window.confirm('Bu bilgisayardaki kayıtlı Cloudflare bağlantısı unutulsun mu?')) return;
+    try {
+      await desktop.cloudflareForget();
+      setToken(''); setInfra(null);
+      notify('Cloudflare API tokeni Windows Credential Manager’dan kaldırıldı.', 'success');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kaldırılamadı.', 'error'); }
   }
 
   async function saveBranding(event: FormEvent<HTMLFormElement>) {
@@ -252,13 +261,13 @@ export function SettingsPage({ notify, health }: { notify: Notify; health: Healt
     </section>
 
     <section className="panel"><div className="panel-heading"><div><h3>Cloudflare Kurulum ve Onarım</h3><p>Yalnız sabit hesaptaki wa-ai-knowledge-prod ve wa-knowledge-index eksikse oluşturabilir. D1, R2, Worker, mevcut Queue, DNS veya plan değiştirilmez.</p></div><span className={`pill ${infra?.overall === 'ready' ? 'ready' : 'warn'}`}>{infra?.overall === 'ready' ? 'Hazır' : infra ? 'İnceleme gerekiyor' : 'Taranmadı'}</span></div>
-      {isDesktop ? <div className="summary-box"><strong>Masaüstü güvenlik sınırı</strong><p>Windows uygulaması Cloudflare API tokeni kabul etmez, saklamaz veya Worker’a iletmez. Kurulum/onarım yalnız web yönetim panelinden yapılır.</p></div> : <div className="form-grid"><label>Account ID<input value={ACCOUNT_ID} readOnly /></label><label className="wide">Sınırlı Cloudflare API Token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder="Yalnız izinli WPAI kaynakları için" /></label><div className="form-actions wide"><button type="button" className="button secondary" onClick={() => setToken('')}>Tokeni Bellekten Sil</button><button type="button" className="button secondary" disabled={busy} onClick={() => void scan()}>{busy ? 'İşleniyor…' : 'Tam Sistem Taraması'}</button><button type="button" className="button primary" disabled={busy || !infra || infra.overall === 'ready'} onClick={() => void repair()}>Eksikleri Kur ve Onar</button></div></div>}
-      <p className="safe-note">Web sürümünde token yalnız bu sayfanın belleğinde tutulur; D1, R2, log veya masaüstü credential alanına yazılmaz.</p>
+      <div className="form-grid"><label>Account ID<input value={ACCOUNT_ID} readOnly /></label><label className="wide">Sınırlı Cloudflare API Token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" placeholder={isDesktop ? 'Yeni token girin veya kayıtlı bağlantıyı kullanın' : 'Yalnız izinli WPAI kaynakları için'} /></label><div className="form-actions wide"><button type="button" className="button secondary" onClick={() => setToken('')}>Giriş Alanını Temizle</button><button type="button" className="button secondary" disabled={busy} onClick={() => void scan()}>{busy ? 'İşleniyor…' : 'Tam Sistem Taraması'}</button><button type="button" className="button primary" disabled={busy || !infra || infra.overall === 'ready'} onClick={() => void repair()}>Eksikleri Kur ve Onar</button>{isDesktop && <button type="button" className="button danger-button" disabled={busy} onClick={() => void forgetCloudflare()}>Bu Bilgisayardaki Bağlantıyı Unut</button>}</div></div>
+      <p className="safe-note">{isDesktop ? 'Doğrulanan token yalnız Windows Credential Manager’da tutulur; Worker’a, D1’e veya loglara yazılmaz.' : 'Web sürümünde token yalnız bu sayfanın belleğinde tutulur; D1, R2 veya loglara yazılmaz.'}</p>
       {infra && <div className="infra-grid">{infra.components.map(item => <article key={item.key} className={item.status}><span>{item.label}</span><strong>{labelStatus(item.status)}</strong>{item.current && <small>Mevcut: {item.current}</small>}{item.expected && <small>Beklenen: {item.expected}</small>}{item.details && <p>{item.details}</p>}</article>)}</div>}
     </section>
 
-    <section className="panel"><div className="panel-heading"><div><h3>WhatsApp Business API</h3><p>Meta bağlantısı ve gönderim durumu. Secret girişi Windows uygulamasında kapalıdır.</p></div><span className={`pill ${meta?.configured && meta.status === 'configured' ? 'ready' : 'warn'}`}>{meta?.configured ? meta.status : 'Bağlantı yok'}</span></div><div className="webhook"><span>Webhook URL</span><code>{webhook}</code><button className="text-button" onClick={() => void navigator.clipboard.writeText(webhook)}>Kopyala</button></div>
-      {isDesktop ? <div className="summary-box"><strong>Secret girişi devre dışı</strong><p>Meta access token, app secret ve verify token masaüstü uygulamasına girilemez. Bağlantı bilgileri yalnız web yönetim panelinden şifreli biçimde kaydedilir.</p><div className="form-actions">{meta?.configured && meta.status === 'configured' && <button className="button secondary" onClick={() => void pauseMeta(true)}>Gönderimi Durdur</button>}{meta?.configured && meta.status === 'paused' && <button className="button secondary" onClick={() => void pauseMeta(false)}>Yeniden Aç</button>}</div></div> : <form className="form-grid" onSubmit={saveMeta}><label className="wide">Meta Access Token<input name="accessToken" type="password" required autoComplete="new-password" /></label><label>App Secret<input name="appSecret" type="password" required /></label><label>Webhook Verify Token<input name="verifyToken" type="password" required /></label><label>Phone Number ID<input name="phoneNumberId" required /></label><label>Business Account ID<input name="businessAccountId" required /></label><label className="wide">Yönetici WhatsApp numarası<input name="adminPhone" placeholder="+905…" /></label><div className="form-actions wide"><button className="button primary" disabled={busy}>Kaydet ve Bağlantıyı Doğrula</button>{meta?.configured && meta.status === 'configured' && <button type="button" className="button secondary" onClick={() => void pauseMeta(true)}>Bağlantıyı Durdur</button>}{meta?.configured && meta.status === 'paused' && <button type="button" className="button secondary" onClick={() => void pauseMeta(false)}>Yeniden Aç</button>}{meta?.configured && <button type="button" className="button danger-button" onClick={() => void removeMeta()}>Bilgileri Sil</button>}</div></form>}
+    <section className="panel"><div className="panel-heading"><div><h3>WhatsApp Business API</h3><p>Meta bağlantı bilgileri uygulama içinden girilir, Worker’da şifrelenir ve gerçek Graph API isteğiyle doğrulanır.</p></div><span className={`pill ${meta?.configured && meta.status === 'configured' ? 'ready' : 'warn'}`}>{meta?.configured ? meta.status : 'Bağlantı yok'}</span></div><div className="webhook"><span>Webhook URL</span><code>{webhook}</code><button className="text-button" onClick={() => void navigator.clipboard.writeText(webhook)}>Kopyala</button></div>
+      <form className="form-grid" onSubmit={saveMeta}><label className="wide">Meta Access Token<input name="accessToken" type="password" required autoComplete="new-password" /></label><label>App Secret<input name="appSecret" type="password" required /></label><label>Webhook Verify Token<input name="verifyToken" type="password" required /></label><label>Phone Number ID<input name="phoneNumberId" required /></label><label>Business Account ID<input name="businessAccountId" required /></label><label className="wide">Yönetici WhatsApp numarası<input name="adminPhone" placeholder="+905…" /></label><div className="form-actions wide"><button className="button primary" disabled={busy}>Kaydet ve Bağlantıyı Doğrula</button>{meta?.configured && meta.status === 'configured' && <button type="button" className="button secondary" onClick={() => void pauseMeta(true)}>Bağlantıyı Durdur</button>}{meta?.configured && meta.status === 'paused' && <button type="button" className="button secondary" onClick={() => void pauseMeta(false)}>Yeniden Aç</button>}{meta?.configured && <button type="button" className="button danger-button" onClick={() => void removeMeta()}>Bilgileri Sil</button>}</div></form>
     </section>
 
     <section className="grid-two"><div className="panel"><h3>Hazır Cevaplar</h3><form className="form-stack" onSubmit={saveReply}><label>Başlık<input name="title" required /></label><label>Mesaj<textarea name="body" rows={5} required /></label><button className="button primary">Hazır Cevap Ekle</button></form><div className="knowledge-list">{replies.map(reply => <article key={reply.id}><div><span>{reply.status} · {formatDate(reply.updated_at)}</span><h4>{reply.title}</h4><p>{reply.body}</p></div><div className="form-actions"><button className="text-button" onClick={() => void editReply(reply)}>Düzenle</button><button className="text-button danger" onClick={() => void disableReply(reply)}>Devre Dışı</button></div></article>)}</div>{!replies.length && <Empty text="Hazır cevap yok." />}</div>

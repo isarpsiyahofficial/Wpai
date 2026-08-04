@@ -1,3 +1,5 @@
+mod cloudflare;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -605,6 +607,11 @@ pub fn run() {
             show_desktop_notification,
             show_main_window,
             quit_application,
+            cloudflare::cloudflare_connection_status,
+            cloudflare::cloudflare_scan,
+            cloudflare::cloudflare_repair,
+            cloudflare::cloudflare_setup,
+            cloudflare::cloudflare_forget,
             faiss_health,
             faiss_status,
             faiss_replace,
@@ -656,10 +663,14 @@ mod tests {
     }
 
     #[test]
-    fn desktop_permissions_contain_no_provider_secrets() {
+    fn desktop_permissions_expose_operations_but_never_raw_provider_secrets() {
         let permissions = include_str!("../permissions/default.toml").to_ascii_lowercase();
-        assert!(!permissions.contains("cloudflare_token"));
-        assert!(!permissions.contains("meta_access"));
+        assert!(permissions.contains("cloudflare_setup"));
+        assert!(permissions.contains("cloudflare_scan"));
+        assert!(permissions.contains("cloudflare_repair"));
+        assert!(permissions.contains("cloudflare_forget"));
+        assert!(!permissions.contains("load_cloudflare_api_token"));
+        assert!(!permissions.contains("meta_access_token"));
         assert!(permissions.contains("save_desktop_refresh_token"));
         let capability = include_str!("../capabilities/local.json").to_ascii_lowercase();
         assert!(!capability.contains("workers.dev"));

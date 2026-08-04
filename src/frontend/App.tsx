@@ -30,7 +30,7 @@ const NAV: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'settings', label: 'Ayarlar', icon: '⚙' }
 ];
 
-type AuthState = { phase: 'loading' | 'setup' | 'desktopSetup' | 'login' | 'ready'; admin?: Admin };
+type AuthState = { phase: 'loading' | 'setup' | 'cloudflareSetup' | 'login' | 'ready'; admin?: Admin };
 type Toast = { message: string; kind: 'success' | 'error' | 'info' } | null;
 type Branding = {
   app_name: string;
@@ -72,7 +72,7 @@ export function App() {
     try {
       const setup = await publicApi<{ required: boolean }>('/api/auth/setup-status');
       if (setup.required) {
-        setAuth({ phase: desktopMode ? 'desktopSetup' : 'setup' });
+        setAuth({ phase: desktopMode ? 'cloudflareSetup' : 'setup' });
         return;
       }
       if (desktopMode) {
@@ -93,7 +93,7 @@ export function App() {
       }
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Uygulama başlatılamadı.', 'error');
-      setAuth({ phase: 'login' });
+      setAuth({ phase: desktopMode ? 'cloudflareSetup' : 'login' });
     }
   }, [desktopMode, notify]);
 
@@ -157,9 +157,9 @@ export function App() {
   }, [desktopMode]);
 
   if (auth.phase === 'loading') return <Centered><div className="loader" /><p>Güvenli panel hazırlanıyor…</p></Centered>;
-  if (auth.phase === 'desktopSetup') return <AuthCard title="İlk Kurulum Web Panelinde Yapılır" description="Güvenlik nedeniyle ilk yönetici hesabı ve kurulum anahtarı Windows uygulamasına girilemez. Önce WPAI web yönetim panelinde ilk yöneticiyi oluşturun; sonra bu uygulamada e-posta ve parolanızla giriş yapın."><button className="button secondary" onClick={() => void boot()}>Kurulum Durumunu Yeniden Kontrol Et</button></AuthCard>;
+  if (auth.phase === 'cloudflareSetup') return <AuthCard title="WPAI İlk Kurulum" description="Cloudflare hesabını bağlayın. Uygulama eksikleri güvenli sınırlar içinde kuracak, ilk yönetici hesabını oluşturacak ve gerçek Windows girişini doğrulayacak."><CloudflareSetupForm onReady={admin => setAuth({ phase: 'ready', admin })} onLogin={() => setAuth({ phase: 'login' })} notify={notify} /></AuthCard>;
   if (auth.phase === 'setup') return <AuthCard title="İlk Yönetici Kurulumu" description="Yönetici hesabınızı oluşturun. Kurulum bir kez tamamlandıktan sonra bu ekran kapanır."><SetupForm onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>;
-  if (auth.phase === 'login') return <AuthCard title="WPAI Yönetim Paneli" description={desktopMode ? 'Güvenli Windows oturumuyla giriş yapın' : 'WhatsApp görüşmeleri ve kontrollü AI yönetimi'}><LoginForm desktopMode={desktopMode} onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>;
+  if (auth.phase === 'login') return <AuthCard title="WPAI Yönetim Paneli" description={desktopMode ? 'Güvenli Windows oturumuyla giriş yapın' : 'WhatsApp görüşmeleri ve kontrollü AI yönetimi'}><LoginForm desktopMode={desktopMode} onCloudflareSetup={desktopMode ? () => setAuth({ phase: 'cloudflareSetup' }) : undefined} onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>;
 
   const brandInitial = (branding.app_name || 'W').trim().slice(0, 1).toUpperCase();
   return <div className={`app-shell ${collapsed ? 'collapsed' : ''}`}>
@@ -193,6 +193,52 @@ export function App() {
   </div>;
 }
 
+const CLOUDFLARE_ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
+
+function CloudflareSetupForm({ onReady, onLogin, notify }: { onReady: (admin: Admin) => void; onLogin: () => void; notify: Notify }) {
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('Cloudflare hesabı henüz bağlı değil.');
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const password = formValue(form, 'password');
+    const confirm = formValue(form, 'confirm');
+    if (password !== confirm) { notify('Parolalar eşleşmiyor.', 'error'); return; }
+    setBusy(true);
+    setStage('Hesap doğrulanıyor, eksik kaynaklar kuruluyor ve WPAI dağıtılıyor…');
+    try {
+      const email = formValue(form, 'email');
+      await desktop.cloudflareSetup({
+        accountId: CLOUDFLARE_ACCOUNT_ID,
+        apiToken: formValue(form, 'apiToken'),
+        adminName: formValue(form, 'name'),
+        adminEmail: email,
+        adminPassword: password
+      });
+      setStage('Cloudflare hazır. Gerçek Windows oturumu doğrulanıyor…');
+      const session = await desktopLogin(email, password);
+      notify('Cloudflare bağlantısı, ilk yönetici hesabı ve Windows girişi başarıyla tamamlandı.', 'success');
+      onReady(session.admin);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'WPAI ilk kurulumu tamamlanamadı.';
+      setStage(message);
+      notify(message, 'error');
+    } finally { setBusy(false); }
+  }
+  return <form onSubmit={submit} className="auth-form cloudflare-onboarding">
+    <label>Cloudflare Account ID<input value={CLOUDFLARE_ACCOUNT_ID} readOnly /></label>
+    <label>Sınırlı Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" placeholder="Token yalnız Windows Credential Manager'da saklanır" /></label>
+    <label>Yönetici adı<input name="name" required minLength={2} /></label>
+    <label>Yönetici e-postası / ID<input name="email" type="email" required autoComplete="username" /></label>
+    <label>Yeni parola<input name="password" type="password" required minLength={12} autoComplete="new-password" /></label>
+    <label>Parola tekrarı<input name="confirm" type="password" required minLength={12} autoComplete="new-password" /></label>
+    <p className="safe-note">Token Worker'a, D1'e veya loglara yazılmaz. Yanlış D1 kimliği görülürse veri kaybını önlemek için kurulum durur.</p>
+    <p role="status">{stage}</p>
+    <button className="button primary" disabled={busy}>{busy ? 'Kurulum yapılıyor…' : 'Cloudflare’ı Bağla, Eksikleri Kur ve Giriş Yap'}</button>
+    <button type="button" className="button secondary" disabled={busy} onClick={onLogin}>Mevcut Hesapla Giriş Yap</button>
+  </form>;
+}
+
 function SetupForm({ onReady, notify }: { onReady: (admin: Admin, csrf: string) => void; notify: Notify }) {
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -214,7 +260,7 @@ function SetupForm({ onReady, notify }: { onReady: (admin: Admin, csrf: string) 
   return <form onSubmit={submit} className="auth-form"><label>Ad soyad<input name="name" required minLength={2} /></label><label>E-posta<input name="email" type="email" required /></label><label>Yeni parola<input name="password" type="password" required minLength={12} /></label><label>Parola tekrarı<input name="confirm" type="password" required minLength={12} /></label><label>Kurulum anahtarı<input name="bootstrapToken" type="password" required /></label><button className="button primary" disabled={busy}>{busy ? 'Kuruluyor…' : 'Yönetici Hesabını Oluştur'}</button></form>;
 }
 
-function LoginForm({ desktopMode, onReady, notify }: { desktopMode: boolean; onReady: (admin: Admin, csrf: string) => void; notify: Notify }) {
+function LoginForm({ desktopMode, onCloudflareSetup, onReady, notify }: { desktopMode: boolean; onCloudflareSetup?: (() => void) | undefined; onReady: (admin: Admin, csrf: string) => void; notify: Notify }) {
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -236,7 +282,7 @@ function LoginForm({ desktopMode, onReady, notify }: { desktopMode: boolean; onR
     } catch (error) { notify(error instanceof Error ? error.message : 'Giriş başarısız.', 'error'); }
     finally { setBusy(false); }
   }
-  return <form onSubmit={submit} className="auth-form"><label>E-posta<input name="email" type="email" required autoComplete="username" /></label><label>Parola<input name="password" type="password" required minLength={12} autoComplete="current-password" /></label><button className="button primary" disabled={busy}>{busy ? 'Giriş yapılıyor…' : 'Giriş Yap'}</button></form>;
+  return <form onSubmit={submit} className="auth-form"><label>E-posta<input name="email" type="email" required autoComplete="username" /></label><label>Parola<input name="password" type="password" required minLength={12} autoComplete="current-password" /></label><button className="button primary" disabled={busy}>{busy ? 'Giriş yapılıyor…' : 'Giriş Yap'}</button>{desktopMode && onCloudflareSetup && <button type="button" className="button secondary" disabled={busy} onClick={onCloudflareSetup}>Cloudflare Kurulumu ve Onarımı</button>}</form>;
 }
 
 function AuthCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {

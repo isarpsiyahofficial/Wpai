@@ -17,3 +17,6 @@ sidecar/build/
 *.pem
 *.key
 *.pfx
+# Generated only during Windows packaging
+desktop-bootstrap/runtime/
+desktop-bootstrap/project/

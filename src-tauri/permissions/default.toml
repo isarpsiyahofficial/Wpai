@@ -1,6 +1,6 @@
 [[permission]]
 identifier = "allow-wpai-commands"
-description = "Allows the packaged WPAI window to manage only its opaque desktop session, local preferences and local FAISS cache."
+description = "Allows the packaged WPAI window to manage its opaque session, local preferences, local Cloudflare onboarding and local FAISS cache without exposing stored provider secrets."
 commands.allow = [
   "get_or_create_device_id",
   "save_desktop_refresh_token",
@@ -13,6 +13,11 @@ commands.allow = [
   "show_desktop_notification",
   "show_main_window",
   "quit_application",
+  "cloudflare_connection_status",
+  "cloudflare_scan",
+  "cloudflare_repair",
+  "cloudflare_setup",
+  "cloudflare_forget",
   "faiss_health",
   "faiss_status",
   "faiss_replace",
