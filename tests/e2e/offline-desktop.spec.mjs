@@ -35,8 +35,8 @@ test('offline local knowledge mode searches the packaged index and exposes no se
   await expect(page.getByRole('heading', { name: 'Yerel Eğitim İndeksi' })).toBeVisible();
   await page.getByLabel('Onaylı yerel bilgilerde ara').fill('admin panelli site');
   await page.getByRole('button', { name: 'Yerel Bilgide Ara' }).click();
-  await expect(page.getByText('Kurumsal web sitesi')).toBeVisible();
-  await expect(page.getByText('Admin panelli kurumsal web sitesi ve ürün kataloğu')).toBeVisible();
+  await expect(page.getByText('Kurumsal web sitesi', { exact: true })).toBeVisible();
+  await expect(page.getByText('Admin panelli kurumsal web sitesi ve ürün kataloğu', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Buluttan Tam Senkronize Et' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Giriş Yap' })).toHaveCount(0);
 });
