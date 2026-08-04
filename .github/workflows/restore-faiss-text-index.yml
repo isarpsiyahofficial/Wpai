@@ -1,0 +1,100 @@
+name: Restore Verified FAISS Text Index
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/restore-faiss-text-index.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: ${{ github.event.pull_request.head.ref == 'agent/wpai-production-rebuild' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sidecar/requirements.txt
+
+      - name: Restore the last fully verified text-index implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show a713682027b2ff74eba0d354a716fd3957fb2826:sidecar/faiss_service.py > sidecar/faiss_service.py
+          python - <<'PY'
+          from pathlib import Path
+
+          service = Path('sidecar/faiss_service.py')
+          value = service.read_text('utf-8')
+          marker = 'TEXT_INDEX_VERSION = 1\n\n\ndef emit(value: Any, code: int = 0) -> None:'
+          replacement = '''TEXT_INDEX_VERSION = 1
+
+
+def configure_utf8_streams() -> None:
+    """Keep Turkish metadata lossless across Windows pipes and PyInstaller."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
+
+
+configure_utf8_streams()
+
+
+def emit(value: Any, code: int = 0) -> None:'''
+          if value.count(marker) != 1:
+              raise SystemExit(f'Expected one FAISS stream insertion point, found {value.count(marker)}')
+          service.write_text(value.replace(marker, replacement, 1), 'utf-8')
+
+          tests = Path('sidecar/test_faiss_service.py')
+          value = tests.read_text('utf-8')
+          first = 'subprocess.run([sys.executable, str(SCRIPT), *args], check=True, capture_output=True, text=True)'
+          second = 'subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)'
+          if value.count(first) != 1 or value.count(second) != 1:
+              raise SystemExit('Expected UTF-8 subprocess helper expressions were not found exactly once.')
+          value = value.replace(first, 'subprocess.run([sys.executable, str(SCRIPT), *args], check=True, capture_output=True, text=True, encoding="utf-8")', 1)
+          value = value.replace(second, 'subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8")', 1)
+          tests.write_text(value, 'utf-8')
+          PY
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install FAISS dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sidecar/requirements.txt
+      - name: Verify restored sidecar and complete application
+        run: |
+          set -euo pipefail
+          python -m compileall -q scripts sidecar
+          python -m pytest -q sidecar/test_faiss_service.py
+          npm run security:scan
+          npm run validate
+          npm run typecheck
+          npm run test
+          npm run build
+          npm run deploy:dry
+      - name: Commit only the verified restoration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'WPAI Build Agent'
+          git config user.email 'actions@users.noreply.github.com'
+          git add sidecar/faiss_service.py sidecar/test_faiss_service.py
+          git diff --cached --check
+          git commit -m 'fix Windows UTF-8 without changing the verified FAISS text index'
+          git push origin HEAD:agent/wpai-production-rebuild
