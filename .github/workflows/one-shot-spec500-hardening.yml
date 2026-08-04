@@ -1,0 +1,391 @@
+name: WPAI One-shot Spec 500 Hardening
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - '.github/workflows/one-shot-spec500-hardening.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+      - name: Apply binding specification hardening
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text('utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'ANCHOR_NOT_UNIQUE:{path}:{text.count(old)}')
+              file.write_text(text.replace(old, new), 'utf-8')
+
+          replace_once(
+              'tests/worker/management-api.test.ts',
+              "    vi.spyOn(env.AI,'run').mockResolvedValue({data:[[1,0,0]],usage:{input_tokens:10}} as never); vi.spyOn(env.KNOWLEDGE_INDEX,'upsert').mockResolvedValue({count:1,ids:['x']} as never);\n    const approved=await request(`/api/knowledge/${knowledgeId}`,{method:'PUT',headers:authHeaders(auth),body:JSON.stringify({title:'Teslim Süreci',category:'Süreç',content:'Kapsam onayından sonra geliştirme başlar.',status:'approved',usagePermission:'both'})}); expect(approved.status).toBe(200);\n    const row=await env.DB.prepare('SELECT status,usage_permission,vector_status,vector_version FROM business_knowledge WHERE id=?').bind(knowledgeId).first(); expect(row).toMatchObject({status:'approved',usage_permission:'both',vector_status:'indexed',vector_version:1});",
+              "    const approved=await request(`/api/knowledge/${knowledgeId}`,{method:'PUT',headers:authHeaders(auth),body:JSON.stringify({title:'Teslim Süreci',category:'Süreç',content:'Kapsam onayından sonra geliştirme başlar.',status:'approved',usagePermission:'both'})}); expect(approved.status).toBe(200);\n    const row=await env.DB.prepare('SELECT status,usage_permission,vector_status,vector_version FROM business_knowledge WHERE id=?').bind(knowledgeId).first(); expect(row).toMatchObject({status:'approved',usage_permission:'both',vector_status:'pending',vector_version:0});\n    const vectorJob=await env.DB.prepare('SELECT operation,target,status FROM vector_sync_jobs WHERE knowledge_id=? ORDER BY created_at DESC LIMIT 1').bind(knowledgeId).first(); expect(vectorJob).toMatchObject({operation:'upsert',target:'cloud',status:'queued'});"
+          )
+
+          replace_once(
+              'src-tauri/Cargo.toml',
+              'tauri-plugin-shell = "2.3.3"\n',
+              'tauri-plugin-shell = "2.3.3"\ntauri-plugin-single-instance = "2"\ntauri-plugin-dialog = "2"\ntauri-plugin-notification = "2"\n'
+          )
+
+          replace_once(
+              'src-tauri/src/lib.rs',
+              'use tauri_plugin_shell::ShellExt;\n',
+              'use tauri_plugin_dialog::DialogExt;\nuse tauri_plugin_notification::NotificationExt;\nuse tauri_plugin_shell::ShellExt;\n'
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '#[derive(Debug, Serialize, Deserialize)]\n#[serde(rename_all = "camelCase")]\nstruct FaissMatch {\n    id: String,\n    score: f32,\n    metadata: Value,\n}\n',
+              '#[derive(Debug, Serialize, Deserialize)]\n#[serde(rename_all = "camelCase")]\nstruct FaissMatch {\n    id: String,\n    score: f32,\n    metadata: Value,\n}\n\n#[derive(Debug, Serialize)]\n#[serde(rename_all = "camelCase")]\nstruct PickedDesktopFile {\n    name: String,\n    mime_type: String,\n    bytes: Vec<u8>,\n}\n'
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '#[tauri::command]\nfn show_main_window(app: AppHandle) -> Result<(), String> {',
+              '''fn supported_file_mime(extension: &str) -> Option<&'static str> {\n    match extension.to_ascii_lowercase().as_str() {\n        "png" => Some("image/png"),\n        "jpg" | "jpeg" => Some("image/jpeg"),\n        "webp" => Some("image/webp"),\n        "pdf" => Some("application/pdf"),\n        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),\n        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),\n        "csv" => Some("text/csv"),\n        "txt" => Some("text/plain"),\n        _ => None,\n    }\n}\n\n#[tauri::command]\nasync fn pick_desktop_file(app: AppHandle) -> Result<Option<PickedDesktopFile>, String> {\n    let selected = app\n        .dialog()\n        .file()\n        .add_filter(\n            "WPAI desteklenen dosyalar",\n            &["png", "jpg", "jpeg", "webp", "pdf", "docx", "xlsx", "csv", "txt"],\n        )\n        .blocking_pick_file();\n    let Some(selected) = selected else { return Ok(None); };\n    let path = selected\n        .into_path()\n        .map_err(|_| "Seçilen dosya yolu okunamadı.".to_string())?;\n    let metadata = fs::metadata(&path)\n        .map_err(|_| "Seçilen dosya bilgisi okunamadı.".to_string())?;\n    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 25 * 1024 * 1024 {\n        return Err("Dosya boş olamaz ve 25 MB sınırını aşamaz.".into());\n    }\n    let extension = path\n        .extension()\n        .and_then(|value| value.to_str())\n        .unwrap_or_default();\n    let mime_type = supported_file_mime(extension)\n        .ok_or_else(|| "Bu dosya türü desteklenmiyor.".to_string())?;\n    let bytes = fs::read(&path).map_err(|_| "Seçilen dosya okunamadı.".to_string())?;\n    let name = path\n        .file_name()\n        .and_then(|value| value.to_str())\n        .unwrap_or("wpai-dosya")\n        .chars()\n        .take(180)\n        .collect();\n    Ok(Some(PickedDesktopFile { name, mime_type: mime_type.into(), bytes }))\n}\n\n#[tauri::command(rename_all = "camelCase")]\nfn show_desktop_notification(app: AppHandle, title: String, body: String) -> Result<(), String> {\n    let safe_title = title.trim().to_string();\n    let safe_body = body.trim().to_string();\n    if safe_title.is_empty() || safe_title.chars().count() > 100\n        || safe_body.is_empty() || safe_body.chars().count() > 500 {\n        return Err("Bildirim başlığı veya içeriği geçersiz.".into());\n    }\n    app.notification()\n        .builder()\n        .title(safe_title)\n        .body(safe_body)\n        .show()\n        .map_err(|_| "Windows bildirimi gösterilemedi.".to_string())\n}\n\n#[tauri::command]\nfn show_main_window(app: AppHandle) -> Result<(), String> {'''
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '    tauri::Builder::default()\n        .manage(Mutex::new(DesktopPreferences::default()))\n        .plugin(tauri_plugin_shell::init())\n',
+              '''    tauri::Builder::default()\n        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {\n            if let Some(window) = app.get_webview_window("main") {\n                let _ = window.show();\n                let _ = window.unminimize();\n                let _ = window.set_focus();\n            }\n        }))\n        .manage(Mutex::new(DesktopPreferences::default()))\n        .plugin(tauri_plugin_shell::init())\n        .plugin(tauri_plugin_dialog::init())\n        .plugin(tauri_plugin_notification::init())\n'''
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '            set_windows_autostart,\n            show_main_window,\n',
+              '            set_windows_autostart,\n            pick_desktop_file,\n            show_desktop_notification,\n            show_main_window,\n'
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '        validate_device_seed, validate_refresh_token, validate_source_checksum, validate_vector,\n        FAISS_DIMENSION,\n',
+              '        supported_file_mime, validate_device_seed, validate_refresh_token, validate_source_checksum,\n        validate_vector, FAISS_DIMENSION,\n'
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '    #[test]\n    fn desktop_permissions_contain_no_provider_secrets() {',
+              '''    #[test]\n    fn native_file_picker_accepts_only_supported_types() {\n        assert_eq!(supported_file_mime("PDF"), Some("application/pdf"));\n        assert_eq!(supported_file_mime("jpeg"), Some("image/jpeg"));\n        assert_eq!(supported_file_mime("exe"), None);\n    }\n\n    #[test]\n    fn desktop_permissions_contain_no_provider_secrets() {'''
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '        assert!(permissions.contains("save_desktop_refresh_token"));\n',
+              '''        assert!(permissions.contains("save_desktop_refresh_token"));\n        assert!(permissions.contains("pick_desktop_file"));\n        assert!(permissions.contains("show_desktop_notification"));\n        let source = include_str!("lib.rs");\n        assert!(source.contains("tauri_plugin_single_instance::init"));\n        assert!(source.contains("tauri_plugin_dialog::init"));\n        assert!(source.contains("tauri_plugin_notification::init"));\n'''
+          )
+
+          replace_once(
+              'src-tauri/permissions/default.toml',
+              '  "set_windows_autostart",\n  "show_main_window",\n',
+              '  "set_windows_autostart",\n  "pick_desktop_file",\n  "show_desktop_notification",\n  "show_main_window",\n'
+          )
+
+          replace_once(
+              'src/frontend/desktop.ts',
+              '  showMainWindow(): Promise<void> {\n    return requiredInvoke<void>(\'show_main_window\');\n  },\n',
+              '''  pickFile(): Promise<{ name: string; mimeType: string; bytes: number[] } | null> {\n    return requiredInvoke<{ name: string; mimeType: string; bytes: number[] } | null>('pick_desktop_file');\n  },\n  notify(title: string, body: string): Promise<void> {\n    return requiredInvoke<void>('show_desktop_notification', { title, body });\n  },\n  showMainWindow(): Promise<void> {\n    return requiredInvoke<void>('show_main_window');\n  },\n'''
+          )
+
+          replace_once(
+              'src/frontend/pages/whatsapp.tsx',
+              "import { Empty, formatDate } from './core';\n",
+              "import { Empty, formatDate } from './core';\nimport { desktop } from '../desktop';\n"
+          )
+          replace_once(
+              'src/frontend/pages/whatsapp.tsx',
+              '  async function changeMode(mode: string, pausedUntil: string | null = null) {',
+              '''  async function chooseAttachment() {\n    if (desktop.available()) {\n      try {\n        const selected = await desktop.pickFile();\n        if (!selected) return;\n        await upload(new File([new Uint8Array(selected.bytes)], selected.name, { type: selected.mimeType }));\n      } catch (error) {\n        notify(error instanceof Error ? error.message : 'Native dosya seçici açılamadı.', 'error');\n      }\n      return;\n    }\n    fileRef.current?.click();\n  }\n\n  async function changeMode(mode: string, pausedUntil: string | null = null) {'''
+          )
+          replace_once(
+              'src/frontend/pages/whatsapp.tsx',
+              '<button type="button" className="button secondary" onClick={() => fileRef.current?.click()} disabled={busy}>Dosya Ekle</button>',
+              '<button type="button" className="button secondary" onClick={() => void chooseAttachment()} disabled={busy}>Dosya Ekle</button>'
+          )
+
+          replace_once(
+              'src/frontend/App.tsx',
+              "import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';\n",
+              "import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';\nimport { desktop } from './desktop';\n"
+          )
+          replace_once(
+              'src/frontend/App.tsx',
+              "  const notify: Notify = useCallback((message, kind = 'info') => {\n    setToast({ message, kind });\n    window.setTimeout(() => setToast(null), 4500);\n  }, []);",
+              "  const notify: Notify = useCallback((message, kind = 'info') => {\n    setToast({ message, kind });\n    window.setTimeout(() => setToast(null), 4500);\n    if (desktopMode && document.hidden) {\n      void desktop.notify(kind === 'error' ? 'WPAI uyarısı' : 'WPAI bildirimi', message).catch(() => undefined);\n    }\n  }, [desktopMode]);"
+          )
+
+          package = Path('package.json')
+          package_text = package.read_text('utf-8')
+          package_text = package_text.replace(
+              '"validate": "python scripts/validate.py"',
+              '"validate": "python scripts/validate.py && python scripts/validate_spec500.py"'
+          )
+          package.write_text(package_text, 'utf-8')
+
+          Path('scripts/validate_spec500.py').write_text(r'''from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def text(path: str) -> str:
+    return (ROOT / path).read_text('utf-8')
+
+
+def require(path: str, *needles: str) -> None:
+    value = text(path)
+    for needle in needles:
+        if needle not in value:
+            raise AssertionError(f"500-item gate missing in {path}: {needle}")
+
+
+def main() -> None:
+    package = json.loads(text('package.json'))
+    if package.get('overrides', {}).get('undici') != '7.29.0':
+        raise AssertionError('Patched Undici override is not pinned')
+    lock = json.loads(text('package-lock.json'))
+    undici = lock.get('packages', {}).get('node_modules/undici', {})
+    if undici.get('version') != '7.29.0':
+        raise AssertionError('package-lock.json does not contain patched Undici 7.29.0')
+
+    require('src-tauri/Cargo.toml', 'tauri-plugin-single-instance', 'tauri-plugin-dialog', 'tauri-plugin-notification')
+    require('src-tauri/src/lib.rs', 'tauri_plugin_single_instance::init', 'pick_desktop_file', 'show_desktop_notification', 'faiss_replace', 'FAISS_DIMENSION')
+    require('src-tauri/permissions/default.toml', 'pick_desktop_file', 'show_desktop_notification')
+    desktop_permissions = text('src-tauri/permissions/default.toml').lower()
+    for forbidden in ('cloudflare_token', 'meta_access', 'meta_secret'):
+        if forbidden in desktop_permissions:
+            raise AssertionError(f'Provider secret command leaked into desktop permissions: {forbidden}')
+    require('src/frontend/pages/whatsapp.tsx', 'desktop.pickFile()', 'new Uint8Array(selected.bytes)')
+    require('src/frontend/App.tsx', 'desktop.notify(', 'document.hidden')
+    require('src/frontend/api.ts', 'desktopAccessToken', 'restoreDesktopSession', 'credentials: \'omit\'')
+    require('src/worker/desktopAuth.ts', '/desktop/login', '/desktop/refresh', 'refresh_token_hash')
+    require('src/worker/vectorSync.ts', 'knowledge_vector_artifacts', 'dimensions: 1024', 'KNOWLEDGE_INDEX.upsert')
+    require('src/worker/localIndexApi.ts', '/training/local-index-bundle', 'sourceChecksum', 'LOCAL_VECTOR_ARTIFACT')
+    require('migrations/0010_vector_artifacts.sql', 'knowledge_vector_artifacts')
+    require('tests/worker/training-vector.test.ts', 'wrong-customer vectors', 'prompt injection', 'duplicate: true', 'campaign execution routes')
+    require('tests/worker/meta-paused-queue.test.ts', 'does not call Meta', 'message.retry')
+    require('tests/e2e/responsive.spec.mjs', "['training', 'AI Eğitim Merkezi']", 'phone-320x568', 'desktop-1920x1080')
+    require('.github/workflows/windows-desktop.yml', 'Real NSIS install, open, single-instance and uninstall smoke', '/S', 'windows-smoke.json')
+
+    tauri = json.loads(text('src-tauri/tauri.conf.json'))
+    if tauri.get('build', {}).get('frontendDist') != '../dist/web':
+        raise AssertionError('Windows app must package the React build')
+    for window in tauri.get('app', {}).get('windows', []):
+        if 'workers.dev' in str(window.get('url', '')):
+            raise AssertionError('Windows shell must not load a remote site')
+
+    source = '\n'.join(text(path) for path in ('src/worker/index.ts', 'src/worker/api.ts', 'src/worker/extendedApi.ts', 'src/worker/operationsApi.ts'))
+    if "'/campaign" in source or '"/campaign' in source:
+        raise AssertionError('Campaign execution route returned to active Worker source')
+    if "batch.queue === 'wa-campaign'" in source:
+        raise AssertionError('Campaign queue consumer returned')
+
+    print('500-item additions validation passed: packaged Tauri, native picker/notifications, single instance, rotating desktop auth, cloud/local vector identity, mandatory safety tests and Windows lifecycle evidence are present.')
+
+
+if __name__ == '__main__':
+    main()
+''', 'utf-8')
+          '@ | python -
+      - name: Replace Windows installer workflow with lifecycle evidence
+        shell: pwsh
+        run: |
+          @'
+          name: WPAI Windows Installer
+
+          on:
+            push:
+              branches: [main, agent/wpai-production-rebuild]
+              paths:
+                - 'src/**'
+                - 'src-tauri/**'
+                - 'sidecar/**'
+                - 'rust-toolchain.toml'
+                - 'package.json'
+                - 'package-lock.json'
+                - 'scripts/validate_spec500.py'
+                - '.github/workflows/windows-desktop.yml'
+            pull_request:
+              branches: [main]
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: wpai-windows-${{ github.ref }}
+            cancel-in-progress: true
+
+          jobs:
+            installer:
+              name: Build, install and verify NSIS setup.exe
+              runs-on: windows-latest
+              timeout-minutes: 60
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: 22
+                    cache: npm
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: '3.12'
+                - uses: dtolnay/rust-toolchain@master
+                  with:
+                    toolchain: 1.97.1
+                    targets: x86_64-pc-windows-msvc
+                    components: clippy
+                - name: Install locked JavaScript dependencies
+                  shell: pwsh
+                  run: npm ci --no-audit --no-fund
+                - name: Install FAISS sidecar dependencies
+                  shell: pwsh
+                  run: |
+                    python -m pip install --upgrade pip
+                    pip install -r sidecar/requirements.txt
+                - name: Compile and test FAISS sidecar
+                  shell: pwsh
+                  run: |
+                    python -m compileall -q sidecar
+                    python -m pytest -q sidecar/test_faiss_service.py
+                - name: Build FAISS sidecar executable
+                  shell: pwsh
+                  run: |
+                    pyinstaller --noconfirm --clean --onefile --name faiss-service sidecar/faiss_service.py
+                    New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
+                    Copy-Item dist/faiss-service.exe src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe
+                    if (-not (Test-Path src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe)) { throw 'FAISS sidecar executable missing' }
+                - name: Typecheck web and Worker source
+                  shell: pwsh
+                  run: npm run typecheck
+                - name: Rust locked unit tests
+                  shell: pwsh
+                  run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+                - name: Rust Clippy with warnings denied
+                  shell: pwsh
+                  run: cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+                - name: Rust locked compile check
+                  shell: pwsh
+                  run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+                - name: Build NSIS installer
+                  shell: pwsh
+                  run: npm run desktop:build
+                - name: Real NSIS install, open, single-instance and uninstall smoke
+                  shell: pwsh
+                  run: |
+                    $ErrorActionPreference = 'Stop'
+                    $installer = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -Recurse | Select-Object -First 1
+                    if (-not $installer) { throw 'NSIS setup.exe was not produced' }
+                    $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+                    $signature = (Get-AuthenticodeSignature $installer.FullName).Status.ToString()
+                    $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+                    if ($installProcess.ExitCode -ne 0) { throw "NSIS silent install failed: $($installProcess.ExitCode)" }
+                    $roots = @((Join-Path $env:LOCALAPPDATA 'WPAI'), (Join-Path $env:LOCALAPPDATA 'Programs\WPAI'))
+                    $installed = $null
+                    foreach ($root in $roots) {
+                      if (Test-Path $root) {
+                        $installed = Get-ChildItem -Path $root -Filter WPAI.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                        if ($installed) { break }
+                      }
+                    }
+                    if (-not $installed) {
+                      $installed = Get-ChildItem -Path $env:LOCALAPPDATA -Filter WPAI.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    }
+                    if (-not $installed) { throw 'Installed WPAI.exe was not found' }
+                    $first = Start-Process -FilePath $installed.FullName -PassThru
+                    Start-Sleep -Seconds 10
+                    $first.Refresh()
+                    if ($first.HasExited) { throw 'Installed WPAI.exe exited during startup smoke' }
+                    $second = Start-Process -FilePath $installed.FullName -PassThru
+                    Start-Sleep -Seconds 5
+                    $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installed.FullName })
+                    if ($running.Count -ne 1) { throw "Single-instance gate failed; process count=$($running.Count)" }
+                    $dataDir = Join-Path $env:APPDATA 'com.wpai.desktop'
+                    New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+                    $marker = Join-Path $dataDir 'uninstall-preserve-marker.txt'
+                    Set-Content -Path $marker -Value 'preserve-user-data'
+                    Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
+                    Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 2
+                    $uninstaller = Get-ChildItem -Path $installed.DirectoryName -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if (-not $uninstaller) { throw 'NSIS uninstaller was not found' }
+                    $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+                    if ($uninstallProcess.ExitCode -ne 0) { throw "NSIS silent uninstall failed: $($uninstallProcess.ExitCode)" }
+                    Start-Sleep -Seconds 3
+                    if (Test-Path $installed.FullName) { throw 'WPAI.exe remained after uninstall' }
+                    if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
+                    $evidence = [ordered]@{
+                      checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+                      installerName = $installer.Name
+                      installerBytes = $installer.Length
+                      installerSha256 = $hash
+                      authenticodeStatus = $signature
+                      installedExe = $installed.FullName
+                      firstInstanceAlive = $true
+                      processCountAfterSecondLaunch = $running.Count
+                      uninstallExitCode = $uninstallProcess.ExitCode
+                      userDataPreserved = (Test-Path $marker)
+                      headSha = '${{ github.sha }}'
+                    }
+                    $evidence | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 windows-smoke.json
+                    Get-Content windows-smoke.json
+                - name: Upload Windows installer and lifecycle evidence
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: WPAI-Windows-Setup-${{ github.sha }}
+                    path: |
+                      src-tauri/target/release/bundle/nsis/*.exe
+                      windows-smoke.json
+                    if-no-files-found: error
+                    retention-days: 30
+          '@ | Set-Content -Encoding utf8 .github/workflows/windows-desktop.yml
+      - name: Regenerate deterministic JavaScript and Rust locks
+        shell: pwsh
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - name: Verify all changed paths before commit
+        shell: pwsh
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --audit-level=high
+          npm run security:scan
+          npm run validate
+          npm run typecheck
+          npm run test:unit
+          npm run test:worker
+          npm run build
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+          cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Commit verified hardening and remove one-shot workflow
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/one-shot-spec500-hardening.yml
+          git config user.name 'WPAI Verification Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add package.json package-lock.json scripts/validate_spec500.py tests/worker/management-api.test.ts src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/lib.rs src-tauri/permissions/default.toml src/frontend/desktop.ts src/frontend/pages/whatsapp.tsx src/frontend/App.tsx .github/workflows/windows-desktop.yml .github/workflows/one-shot-spec500-hardening.yml
+          git commit -m 'Complete native desktop and 500-item verification gates'
+          git push origin HEAD:agent/wpai-production-rebuild
