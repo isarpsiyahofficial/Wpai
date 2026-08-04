@@ -40,11 +40,19 @@ jobs:
           a1cf78a36c048c5d304ef4c01741da925d3dcf62c2d4ef576421612c67caa189  scripts/spec500-patch/part-00
           3838db786395671d5a5ce0f703331e4e62da04418281fcf450d70bc66a87d193  scripts/spec500-patch/part-01
           16f90adad51626011389d455a5a278ddd2b67bd033bf22f41261ed2922eb8639  scripts/spec500-patch/part-02
-          ca5ad9efb18d354ca16e2abf13c0c29f1b048d9f87c0688439eb0899b86f3d01  scripts/spec500-patch/part-03
+          9a92d05c66578e132e1d3cef9144b1c5ee1f25945f641f01c98c950f48744183  scripts/spec500-patch/part-03a
+          7af4cce8f20ec9edb11cbfb2628afee0e2c1de5ca02d15389e410573958633e7  scripts/spec500-patch/part-03b
           802c4941e83e0cb4339220f6c83dad9e6455a5d83ec5376ace6c9d34ccdfe1ae  scripts/spec500-patch/part-04
           EOF
           sha256sum --check /tmp/fragment-checksums
-          cat scripts/spec500-patch/part-* > /tmp/spec500-completion.patch.gz.b64
+          cat \
+            scripts/spec500-patch/part-00 \
+            scripts/spec500-patch/part-01 \
+            scripts/spec500-patch/part-02 \
+            scripts/spec500-patch/part-03a \
+            scripts/spec500-patch/part-03b \
+            scripts/spec500-patch/part-04 \
+            > /tmp/spec500-completion.patch.gz.b64
           echo '82d1aeb192f3ec59a7b218baf55c517a9b2c2b7c992775e53167a719c0b73b8e  /tmp/spec500-completion.patch.gz.b64' | sha256sum --check
           python - <<'PY'
           import base64, gzip
