@@ -88,14 +88,47 @@ jobs:
           $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
           if ($install.ExitCode -ne 0) { throw "NSIS silent install failed: $($install.ExitCode)" }
 
-          $installed = Get-ChildItem -Path $env:LOCALAPPDATA -Filter WPAI.exe -Recurse -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $installed) { throw 'Installed WPAI.exe was not found' }
+          $registryPaths = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $entry = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'WPAI' } |
+            Sort-Object InstallDate -Descending |
+            Select-Object -First 1
+          if (-not $entry) {
+            Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+              Where-Object { $_.DisplayName -like '*WPAI*' } |
+              Select-Object DisplayName, InstallLocation, UninstallString |
+              Format-Table -AutoSize
+            throw 'WPAI uninstall registry entry was not found after successful NSIS install'
+          }
+
+          $installLocation = [string]$entry.InstallLocation
+          if ($installLocation) { $installLocation = $installLocation.Trim().Trim('"') }
+          if (-not $installLocation -or -not (Test-Path $installLocation)) {
+            $uninstallText = [string]$entry.UninstallString
+            if ($uninstallText -match '^"([^"]+\.exe)"') { $installLocation = Split-Path -Parent $Matches[1] }
+            elseif ($uninstallText -match '^([^\s]+\.exe)') { $installLocation = Split-Path -Parent $Matches[1] }
+          }
+          if (-not $installLocation -or -not (Test-Path $installLocation)) {
+            throw "Registered InstallLocation is unavailable: $($entry.InstallLocation)"
+          }
+
+          $installed = Get-ChildItem -Path $installLocation -Filter *.exe -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch '^(uninstall|setup|update)' } |
+            Sort-Object Length -Descending |
+            Select-Object -First 1
+          if (-not $installed) {
+            Get-ChildItem -Path $installLocation -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, FullName -AutoSize
+            throw "Installed application executable was not found in $installLocation"
+          }
 
           $first = Start-Process -FilePath $installed.FullName -PassThru
           Start-Sleep -Seconds 10
           $first.Refresh()
-          if ($first.HasExited) { throw 'Installed WPAI.exe exited during startup smoke' }
+          if ($first.HasExited) { throw "Installed application exited during startup smoke: $($installed.Name)" }
 
           $second = Start-Process -FilePath $installed.FullName -PassThru
           Start-Sleep -Seconds 5
@@ -110,12 +143,17 @@ jobs:
           Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
           Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 2
-          $uninstaller = Get-ChildItem -Path $installed.DirectoryName -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $uninstaller) { throw 'NSIS uninstaller was not found' }
+          $uninstaller = Get-ChildItem -Path $installLocation -Filter 'uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) {
+            $uninstallText = [string]$entry.UninstallString
+            if ($uninstallText -match '^"([^"]+\.exe)"') { $uninstaller = Get-Item $Matches[1] -ErrorAction SilentlyContinue }
+            elseif ($uninstallText -match '^([^\s]+\.exe)') { $uninstaller = Get-Item $Matches[1] -ErrorAction SilentlyContinue }
+          }
+          if (-not $uninstaller) { throw 'NSIS uninstaller was not found through install directory or registry' }
           $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
           if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed: $($uninstall.ExitCode)" }
           Start-Sleep -Seconds 3
-          if (Test-Path $installed.FullName) { throw 'WPAI.exe remained after uninstall' }
+          if (Test-Path $installed.FullName) { throw 'Installed application executable remained after uninstall' }
           if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
 
           [ordered]@{
@@ -124,6 +162,8 @@ jobs:
             installerBytes = $installer.Length
             installerSha256 = $hash
             authenticodeStatus = $signature
+            registryDisplayName = [string]$entry.DisplayName
+            installLocation = $installLocation
             installedExe = $installed.FullName
             firstInstanceAlive = $true
             processCountAfterSecondLaunch = $running.Count
