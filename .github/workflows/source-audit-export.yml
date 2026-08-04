@@ -25,6 +25,26 @@ jobs:
           set -euo pipefail
           git status --short
           test -z "$(git status --short)"
+      - name: Capture live production health
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -D live-health-headers.txt \
+            https://wa-ai-panel.wa-ai-panel.workers.dev/health \
+            -o live-health.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(Path('live-health.json').read_text('utf-8'))
+          if not value.get('ok'):
+              raise SystemExit(f"Live health is not OK: {value}")
+          required = ['worker', 'd1', 'r2Binding', 'queuesBinding', 'workersAiBinding', 'vectorizeBinding']
+          components = value.get('components') or {}
+          missing = [key for key in required if not components.get(key)]
+          if missing:
+              raise SystemExit(f"Live health missing components: {missing}; body={value}")
+          print(json.dumps(value, ensure_ascii=False, indent=2))
+          PY
       - name: Create audit source archive
         run: |
           set -euo pipefail
@@ -36,5 +56,7 @@ jobs:
           path: |
             wpai-source-audit.zip
             wpai-source-audit.zip.sha256
+            live-health.json
+            live-health-headers.txt
           if-no-files-found: error
           retention-days: 3
