@@ -28,7 +28,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply deterministic source patch
-        run: python scripts/apply_desktop_onboarding_patch.py
+        run: |
+          python scripts/apply_desktop_onboarding_patch.py
+          python scripts/fix_desktop_onboarding_types.py
       - name: Validate patched source
         run: |
           npm ci --no-audit --no-fund
