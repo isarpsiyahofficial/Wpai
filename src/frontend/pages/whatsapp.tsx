@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { api, jsonBody } from '../api';
 import type { ConversationDetail, ConversationListItem, Notify } from '../types';
 import { Empty, formatDate } from './core';
+import { desktop } from '../desktop';
 
 type Template = { id: string; meta_name: string; language_code: string; category: string | null; status: string; components_json: string };
 type CannedReply = { id: string; title: string; body: string; status: string };
@@ -122,6 +123,20 @@ export function WhatsAppPage({ notify }: { notify: Notify }) {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
     }
+  }
+
+  async function chooseAttachment() {
+    if (desktop.available()) {
+      try {
+        const selected = await desktop.pickFile();
+        if (!selected) return;
+        await upload(new File([new Uint8Array(selected.bytes)], selected.name, { type: selected.mimeType }));
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Native dosya seçici açılamadı.', 'error');
+      }
+      return;
+    }
+    fileRef.current?.click();
   }
 
   async function changeMode(mode: string, pausedUntil: string | null = null) {
@@ -277,7 +292,7 @@ export function WhatsAppPage({ notify }: { notify: Notify }) {
       <form className="composer" onSubmit={sendText}>
         {suggestion && <div className="suggestion-banner"><strong>AI önerisi · %{Math.round(suggestion.confidence * 100)} · {suggestion.intent}</strong><span>{suggestion.needsHuman ? 'İnsan kontrolü zorunlu' : 'Göndermeden önce düzenleyin'}</span></div>}
         <textarea name="message" required value={messageText} onChange={event => setMessageText(event.target.value)} placeholder="Müşteriye manuel mesaj yazın…" rows={4} />
-        <div className="composer-tools"><select aria-label="Hazır cevap" defaultValue="" onChange={event => { const reply = cannedReplies.find(item => item.id === event.target.value); if (reply) setMessageText(current => current ? `${current}\n${reply.body}` : reply.body); event.target.value = ''; }}><option value="">Hazır cevap seç</option>{cannedReplies.map(reply => <option key={reply.id} value={reply.id}>{reply.title}</option>)}</select><button type="button" className="button secondary" onClick={() => void generateSuggestion()} disabled={busy}>AI Önerisi</button><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.docx,.xlsx,.csv,.txt" onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} /><button type="button" className="button secondary" onClick={() => fileRef.current?.click()} disabled={busy}>Dosya Ekle</button><button className="button primary" disabled={busy || !messageText.trim()}>{busy ? 'İşleniyor…' : 'Gönder'}</button></div>
+        <div className="composer-tools"><select aria-label="Hazır cevap" defaultValue="" onChange={event => { const reply = cannedReplies.find(item => item.id === event.target.value); if (reply) setMessageText(current => current ? `${current}\n${reply.body}` : reply.body); event.target.value = ''; }}><option value="">Hazır cevap seç</option>{cannedReplies.map(reply => <option key={reply.id} value={reply.id}>{reply.title}</option>)}</select><button type="button" className="button secondary" onClick={() => void generateSuggestion()} disabled={busy}>AI Önerisi</button><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.docx,.xlsx,.csv,.txt" onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} /><button type="button" className="button secondary" onClick={() => void chooseAttachment()} disabled={busy}>Dosya Ekle</button><button className="button primary" disabled={busy || !messageText.trim()}>{busy ? 'İşleniyor…' : 'Gönder'}</button></div>
       </form>
     </> : <Empty text="Bir konuşma seçin." />}</section>
 

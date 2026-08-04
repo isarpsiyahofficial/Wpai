@@ -9,6 +9,8 @@ commands.allow = [
   "desktop_preferences",
   "set_desktop_preferences",
   "set_windows_autostart",
+  "pick_desktop_file",
+  "show_desktop_notification",
   "show_main_window",
   "quit_application",
   "faiss_health",

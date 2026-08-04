@@ -13,7 +13,7 @@
     "test:unit": "vitest run --config vitest.node.config.ts",
     "test:worker": "vitest run --config vitest.worker.config.ts",
     "security:scan": "node scripts/scan-secrets.mjs",
-    "validate": "python scripts/validate.py",
+    "validate": "python scripts/validate.py && python scripts/validate_spec500.py",
     "check": "npm run security:scan && npm run validate && npm run typecheck && npm run test && npm run build && npm run deploy:dry",
     "deploy:dry": "npm run build && wrangler deploy --dry-run --strict --experimental-provision=false --experimental-auto-create=false",
     "deploy": "npm run build && wrangler deploy --strict --experimental-provision=false --experimental-auto-create=false",

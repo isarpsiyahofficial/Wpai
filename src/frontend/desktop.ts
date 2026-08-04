@@ -52,6 +52,12 @@ export const desktop = {
   setAutostart(enabled: boolean): Promise<DesktopPreferences> {
     return requiredInvoke<DesktopPreferences>('set_windows_autostart', { enabled });
   },
+  pickFile(): Promise<{ name: string; mimeType: string; bytes: number[] } | null> {
+    return requiredInvoke<{ name: string; mimeType: string; bytes: number[] } | null>('pick_desktop_file');
+  },
+  notify(title: string, body: string): Promise<void> {
+    return requiredInvoke<void>('show_desktop_notification', { title, body });
+  },
   showMainWindow(): Promise<void> {
     return requiredInvoke<void>('show_main_window');
   },

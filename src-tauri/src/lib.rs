@@ -12,6 +12,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, State, WindowEvent,
 };
+use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_shell::ShellExt;
 
 const KEYRING_SERVICE: &str = "WPAI Desktop Session";
@@ -53,6 +55,14 @@ struct FaissMatch {
     id: String,
     score: f32,
     metadata: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedDesktopFile {
+    name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
 }
 
 fn validate_refresh_token(token: &str) -> Result<(), String> {
@@ -260,6 +270,75 @@ fn set_windows_autostart(
     current.autostart_enabled = enabled;
     save_preferences(&app, &current)?;
     Ok(current.clone())
+}
+
+fn supported_file_mime(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "csv" => Some("text/csv"),
+        "txt" => Some("text/plain"),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+async fn pick_desktop_file(app: AppHandle) -> Result<Option<PickedDesktopFile>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter(
+            "WPAI desteklenen dosyalar",
+            &["png", "jpg", "jpeg", "webp", "pdf", "docx", "xlsx", "csv", "txt"],
+        )
+        .blocking_pick_file();
+    let Some(selected) = selected else { return Ok(None); };
+    let path = selected
+        .into_path()
+        .map_err(|_| "Seçilen dosya yolu okunamadı.".to_string())?;
+    let metadata = fs::metadata(&path)
+        .map_err(|_| "Seçilen dosya bilgisi okunamadı.".to_string())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 25 * 1024 * 1024 {
+        return Err("Dosya boş olamaz ve 25 MB sınırını aşamaz.".into());
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let mime_type = supported_file_mime(extension)
+        .ok_or_else(|| "Bu dosya türü desteklenmiyor.".to_string())?;
+    let bytes = fs::read(&path).map_err(|_| "Seçilen dosya okunamadı.".to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("wpai-dosya")
+        .chars()
+        .take(180)
+        .collect();
+    Ok(Some(PickedDesktopFile { name, mime_type: mime_type.into(), bytes }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn show_desktop_notification(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    let safe_title = title.trim().to_string();
+    let safe_body = body.trim().to_string();
+    if safe_title.is_empty()
+        || safe_title.chars().count() > 100
+        || safe_body.is_empty()
+        || safe_body.chars().count() > 500
+    {
+        return Err("Bildirim başlığı veya içeriği geçersiz.".into());
+    }
+    app.notification()
+        .builder()
+        .title(safe_title)
+        .body(safe_body)
+        .show()
+        .map_err(|_| "Windows bildirimi gösterilemedi.".to_string())
 }
 
 #[tauri::command]
@@ -482,8 +561,17 @@ fn build_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(Mutex::new(DesktopPreferences::default()))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let loaded = load_preferences(app.handle());
             if let Ok(mut state) = app.state::<Mutex<DesktopPreferences>>().lock() {
@@ -513,6 +601,8 @@ pub fn run() {
             desktop_preferences,
             set_desktop_preferences,
             set_windows_autostart,
+            pick_desktop_file,
+            show_desktop_notification,
             show_main_window,
             quit_application,
             faiss_health,

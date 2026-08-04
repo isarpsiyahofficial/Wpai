@@ -15,6 +15,7 @@ import {
 } from './api';
 import type { Admin, Health, Notify, PageId } from './types';
 import { AiPage, ContactsPage, DashboardPage, DesktopIndexPanel, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';
+import { desktop } from './desktop';
 
 const NAV: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'dashboard', label: 'Gösterge Paneli', icon: '▦' },
@@ -62,7 +63,10 @@ export function App() {
   const notify: Notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
     window.setTimeout(() => setToast(null), 4500);
-  }, []);
+    if (desktopMode && document.hidden) {
+      void desktop.notify(kind === 'error' ? 'WPAI uyarısı' : 'WPAI bildirimi', message).catch(() => undefined);
+    }
+  }, [desktopMode]);
 
   const boot = useCallback(async () => {
     try {
