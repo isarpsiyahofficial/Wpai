@@ -62,19 +62,28 @@ jobs:
           git apply --check /tmp/spec500-new-files.patch
           git apply /tmp/spec500-new-files.patch
 
-      - name: Apply deterministic compile corrections
+      - name: Apply deterministic compile and fixture corrections
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/worker/webhook.ts')
-          value = path.read_text('utf-8')
+
+          webhook = Path('src/worker/webhook.ts')
+          value = webhook.read_text('utf-8')
           old = "  const metadata = await metadataResponse.json<{ url?: string; mime_type?: string; file_size?: number }>().catch(() => ({}));"
           new = "  const metadata = await metadataResponse.json<{ url?: string; mime_type?: string; file_size?: number }>()\n    .catch((): { url?: string; mime_type?: string; file_size?: number } => ({}));"
           if value.count(old) != 1:
               raise SystemExit(f'Expected exactly one Meta metadata expression, found {value.count(old)}')
-          path.write_text(value.replace(old, new, 1), 'utf-8')
+          webhook.write_text(value.replace(old, new, 1), 'utf-8')
+
+          fixture = Path('tests/worker/training-vector.test.ts')
+          value = fixture.read_text('utf-8')
+          old = "VALUES (?,?,?,'ready',?,?,?,?)"
+          new = "VALUES (?,?,?,'approved',?,?,?,?)"
+          if value.count(old) != 1:
+              raise SystemExit(f'Expected exactly one invalid knowledge source fixture, found {value.count(old)}')
+          fixture.write_text(value.replace(old, new, 1), 'utf-8')
           PY
           rm -rf scripts/spec500-patch
 
