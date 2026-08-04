@@ -207,7 +207,7 @@ async function recordRetrieval(env: Env, input: {
      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     crypto.randomUUID(), input.conversationId, input.contactId, input.queryHashHex,
     env.DEFAULT_EMBEDDING_MODEL, 20, input.threshold, JSON.stringify(safeMatches),
-    JSON.stringify(input.chunkIds), input.selected.length, nowIso());
+    JSON.stringify(input.chunkIds), input.chunkIds.length, nowIso());
 }
 
 export async function buildAiContext(env: Env, conversationId: string, contactId: string, finalMessage: string): Promise<AiContext> {
