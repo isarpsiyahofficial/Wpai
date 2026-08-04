@@ -164,6 +164,7 @@ const pages = [
   ['knowledge', 'Bilgi Bankası'],
   ['files', 'Dosyalar'],
   ['ai', 'AI Kontrolü'],
+  ['training', 'AI Eğitim Merkezi'],
   ['notifications', 'Bildirimler'],
   ['reports', 'Raporlar'],
   ['settings', 'Ayarlar']
@@ -240,7 +241,11 @@ async function installMocks(page, options = {}) {
       'GET /api/catalog': catalog,
       'GET /api/ai/settings': aiSettings,
       'GET /api/meta/status': { configured: true, status: 'configured', verifiedAt: NOW, phoneNumberIdMasked: '***4567' },
-      'GET /api/settings': { aiModel: '@cf/meta/llama-3.1-8b-instruct-fp8-fast', embeddingModel: '@cf/baai/bge-m3', timezone: 'Europe/Istanbul' }
+      'GET /api/settings': { aiModel: '@cf/meta/llama-3.1-8b-instruct-fp8-fast', embeddingModel: '@cf/baai/bge-m3', timezone: 'Europe/Istanbul' },
+      'GET /api/branding': { app_name: 'WPAI Yönetim Paneli', company_name: LONG_NAME, short_description: LONG_TEXT, logo_key: null, primary_color: '#7657ff', secondary_color: '#22c7e8', updated_at: NOW },
+      'GET /api/canned-replies': [{ id: 'reply-1', title: 'Kurumsal paket açıklaması', body: LONG_TEXT, status: 'active', updated_at: NOW }],
+      'GET /api/dead-letters': [{ id: 'dead-letter-1', source_queue: 'wa-outbound', payload_json: JSON.stringify({ messageId: 'message-1', secret: '[REDACTED]' }), error_code: 'META_TEMPORARY_ERROR', status: 'pending', attempts: 4, failed_at: NOW, retried_at: null, resolved_at: null }],
+      'GET /api/training/overview': { sessions: [], items: [], sources: [], jobs: [], index: { indexName: 'wa-ai-knowledge-prod', embeddingModel: '@cf/baai/bge-m3', dimensions: 1024, metric: 'cosine', activeChunks: 14, pendingJobs: 0, failedJobs: 0 } }
     };
 
     if (pathname === '/api/conversations' && method === 'GET') {
@@ -417,7 +422,7 @@ test('critical administrator workflows remain usable with production-sized conte
   await expect(page.locator('.console-messages')).toContainText('kesin fiyat vermeyeceğim');
 
   await page.getByRole('button', { name: 'Ayarlar', exact: true }).click();
-  await page.getByLabel('API Token').fill('test-cloudflare-api-token-that-is-long-enough-for-live-like-check');
+  await page.getByLabel('Sınırlı Cloudflare API Token', { exact: true }).fill('test-cloudflare-api-token-that-is-long-enough-for-live-like-check');
   await page.getByRole('button', { name: 'Tam Sistem Taraması', exact: true }).click();
   await expect(page.locator('.infra-grid')).toContainText('D1 veritabanı wa-ai-prod');
   await assertLayout(page, 'critical workflows/settings');
