@@ -70,6 +70,8 @@ def emit(value: Any, code: int = 0) -> None:'''
           value = value.replace(second, 'subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8")', 1)
           tests.write_text(value, 'utf-8')
           PY
+          grep -q 'text-index.faiss' sidecar/faiss_service.py
+          grep -q 'TEXT_INDEX_REBUILD_REQUIRED' sidecar/faiss_service.py
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
