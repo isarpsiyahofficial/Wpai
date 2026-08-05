@@ -432,7 +432,7 @@ async function verifyDesktopLogin(input) {
       password: input.adminPassword,
       deviceId,
       deviceName: 'WPAI Windows Bağlantı Doğrulaması',
-      appVersion: '1.3.5'
+      appVersion: '1.3.6'
     })
   });
   if (!session?.accessToken || !session?.refreshToken || session.admin?.email !== input.adminEmail.trim().toLowerCase()) {

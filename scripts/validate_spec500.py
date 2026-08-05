@@ -58,8 +58,8 @@ def validate_versions_and_brand() -> None:
     lock = json.loads(text("package-lock.json"))
     tauri = json.loads(text("src-tauri/tauri.conf.json"))
     version = package["version"]
-    if version != "1.3.5":
-        raise AssertionError(f"Expected final audited version 1.3.5, got {version}")
+    if version != "1.3.6":
+        raise AssertionError(f"Expected final audited version 1.3.6, got {version}")
     if lock.get("version") != version or lock.get("packages", {}).get("", {}).get("version") != version:
         raise AssertionError("npm package and lock versions differ")
     if tauri.get("version") != version:
@@ -71,7 +71,7 @@ def validate_versions_and_brand() -> None:
     if f'name = "wpai-desktop"\nversion = "{version}"' not in cargo_lock:
         raise AssertionError("Cargo.lock root version differs")
     require("src/frontend/api.ts", f"appVersion: '{version}'")
-    require("desktop-bootstrap/bootstrap.mjs", f"appVersion: '{version}'")
+    require("desktop-bootstrap/bootstrap-core.mjs", f"appVersion: '{version}'")
     import subprocess
     subprocess.run(["python", str(ROOT / "scripts/sync_brand.py")], check=True, cwd=ROOT)
 
