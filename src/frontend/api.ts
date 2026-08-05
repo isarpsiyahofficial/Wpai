@@ -125,7 +125,7 @@ function ensureDesktopOnline(path: string, init: RequestInit): void {
 
 async function desktopFetch(path: string, init: RequestInit, retry = true): Promise<Response> {
   ensureDesktopOnline(path, init);
-  if (!navigator.onLine) throw new Error('Çevrimdışı modda yalnız yerel onaylı bilgi araması kullanılabilir.');
+  if (!navigator.onLine) throw new Error('İnternet bağlantısı yok. Bulut işlemleri geçici olarak kullanılamıyor.');
   if (!desktopAccessToken || desktopAccessExpiresAt <= Date.now() + 30_000) await restoreDesktopSession();
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${desktopAccessToken}`);
