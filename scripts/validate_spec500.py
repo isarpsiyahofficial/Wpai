@@ -19,6 +19,13 @@ def require(path: str, *needles: str) -> None:
             raise AssertionError(f"500-item gate missing in {path}: {needle}")
 
 
+def forbid(path: str, *needles: str) -> None:
+    value = text(path)
+    for needle in needles:
+        if needle in value:
+            raise AssertionError(f"Superseded product flow returned in {path}: {needle}")
+
+
 def validate_evidence_matrix() -> None:
     payload = json.loads(text("docs/SPEC-500-EVIDENCE.json"))
     if payload.get("format") != "wpai-spec-500-evidence" or payload.get("version") != 1:
@@ -74,9 +81,33 @@ def validate_critical_runtime_gates() -> None:
     require("src-tauri/src/lib.rs", "faiss_search_text", '"search-text"', "tauri_plugin_single_instance::init")
     require("sidecar/faiss_service.py", "TEXT_INDEX_VERSION", "text_vector", "search_text", 'text-index.faiss')
     require("sidecar/test_faiss_service.py", "offline_text_search", "TEXT_INDEX_REBUILD_REQUIRED")
-    require("src/frontend/App.tsx", "phase: 'offline'", "OfflineDesktopPage", "Yalnız yerel, onaylı bilgiler")
+
+    require(
+        "src/frontend/App.tsx",
+        "phase: 'connections'",
+        "DesktopConnectionsPage",
+        "Ayarlar > Bağlantılar",
+        "cloudflareConnectionStatus",
+        "Bağlantıyı Kaldır"
+    )
+    forbid(
+        "src/frontend/App.tsx",
+        "phase: 'offline'",
+        "OfflineDesktopPage",
+        "Yerel Bilgi Modu",
+        "Buluta Yeniden Bağlan",
+        "Cloudflare Kurulumu ve Onarımı"
+    )
+    require(
+        "src/frontend/pages/settings.tsx",
+        "Cloudflare Bağlantısı",
+        "WhatsApp / Meta Bağlantısı",
+        "Bağlantı Bilgisini Güncelle",
+        "Bağlantıyı Kaldır",
+        "D1, R2 ve müşteri verileri silinmez"
+    )
     require("src/frontend/api.ts", "ensureDesktopOnline", "Çevrimdışıyken veri değiştirilemez")
-    require("src/frontend/pages/desktopIndex.tsx", "Yerel Eğitim İndeksi", "faissSearchText", "Gelişmiş teknik durum")
+    require("src/frontend/pages/desktopIndex.tsx", "faissSearchText")
     require("src/worker/trainingApi.ts", "/impact-preview", "training.impact_preview", "simulateTrainingAnswer")
     require("src/frontend/pages/training.tsx", "Canlı AI’a Etkisi", "Mevcut canlı cevap", "Taslak yayınlanırsa olası cevap")
     require("src/worker/vectorSync.ts", "totalSources", "completedJobs", "estimatedCostUsd", "estimatedRemainingSeconds")
@@ -85,7 +116,13 @@ def validate_critical_runtime_gates() -> None:
     require("src-tauri/tauri.conf.json", "installerHooks", "installer-hooks.nsh")
     require(".github/workflows/windows-desktop.yml", "purgeOptionRemovedLocalCache", "silentUninstallPreservedLocalCache", "peSubsystem")
     require("tests/worker/training-vector.test.ts", "current and draft-assisted answer", "estimated cost and remaining time")
-    require("tests/e2e/offline-desktop.spec.mjs", "offline local knowledge mode", "faiss_search_text")
+    require(
+        "tests/e2e/offline-desktop.spec.mjs",
+        "offline startup stays in Settings",
+        "removing a saved connection keeps it removed",
+        "Yerel Bilgi Modu",
+        "Cloudflare Account ID"
+    )
 
 
 def validate_security_and_scope() -> None:
@@ -116,7 +153,7 @@ def main() -> None:
     validate_versions_and_brand()
     validate_critical_runtime_gates()
     validate_security_and_scope()
-    print("500/500 evidence validation passed: every item has explicit source/test evidence and all critical Windows, offline, training, vector, safety and installer gates are present.")
+    print("500/500 evidence validation passed: connection management remains Settings-only, persistent and removable while all security and runtime gates remain present.")
 
 
 if __name__ == "__main__":
