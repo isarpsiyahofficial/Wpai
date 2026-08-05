@@ -66,17 +66,18 @@ replace_once("desktop-bootstrap/bootstrap.mjs", "appVersion: '1.3.2'", "appVersi
 replace_once("scripts/validate_spec500.py", 'version != "1.3.2"', 'version != "1.3.3"')
 replace_once("scripts/validate_spec500.py", 'Expected final audited version 1.3.2', 'Expected final audited version 1.3.3')
 
-for path in (
-    "package.json",
-    "package-lock.json",
-    "src-tauri/tauri.conf.json",
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
-    "src/frontend/api.ts",
-    "desktop-bootstrap/bootstrap.mjs",
-    "scripts/validate_spec500.py",
-):
-    if OLD in read(path):
-        raise SystemExit(f"Old release version remains in {path}")
+checks = {
+    "package.json": '"version": "1.3.3"',
+    "package-lock.json": '"version": "1.3.3"',
+    "src-tauri/tauri.conf.json": '"version": "1.3.3"',
+    "src-tauri/Cargo.toml": 'name = "wpai-desktop"\nversion = "1.3.3"',
+    "src-tauri/Cargo.lock": 'name = "wpai-desktop"\nversion = "1.3.3"',
+    "src/frontend/api.ts": "appVersion: '1.3.3'",
+    "desktop-bootstrap/bootstrap.mjs": "appVersion: '1.3.3'",
+    "scripts/validate_spec500.py": 'Expected final audited version 1.3.3',
+}
+for path, marker in checks.items():
+    if marker not in read(path):
+        raise SystemExit(f"Release marker missing after update: {path} -> {marker}")
 
 print("WPAI connection repair release version synchronized to 1.3.3.")
