@@ -1,0 +1,43 @@
+name: Apply Settings Connection Flow
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - 'scripts/apply_settings_connection_flow.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply the approved Settings-only connection UI
+        run: python scripts/apply_settings_connection_flow.py
+      - name: Verify source and product gates
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run validate
+          npm run build
+      - name: Commit verified connection flow and remove one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/apply_settings_connection_flow.py .github/workflows/apply-settings-connection-flow.yml
+          git config user.name 'WPAI Build Agent'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: finish persistent Settings connection management'
+          git push origin HEAD:agent/wpai-production-rebuild
