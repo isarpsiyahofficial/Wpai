@@ -422,9 +422,14 @@ test('critical administrator workflows remain usable with production-sized conte
   await expect(page.locator('.console-messages')).toContainText('kesin fiyat vermeyeceğim');
 
   await page.getByRole('button', { name: 'Ayarlar', exact: true }).click();
-  await page.getByLabel('Sınırlı Cloudflare API Token', { exact: true }).fill('test-cloudflare-api-token-that-is-long-enough-for-live-like-check');
-  await page.getByRole('button', { name: 'Tam Sistem Taraması', exact: true }).click();
-  await expect(page.locator('.infra-grid')).toContainText('D1 veritabanı wa-ai-prod');
+  await expect(page.getByRole('heading', { name: 'Cloudflare Bağlantısı' })).toBeVisible();
+  await expect(page.getByText('Cloudflare hesap bağlantısı WPAI Windows uygulamasındaki Ayarlar bölümünden yönetilir.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'WhatsApp / Meta Bağlantısı' })).toBeVisible();
+  await page.getByRole('button', { name: 'Bağlantıyı Doğrula', exact: true }).click();
+  await expect(page.locator('.toast.success')).toContainText('Meta bağlantısı doğrulandı');
+  await expect(page.getByLabel('Sınırlı Cloudflare API Token', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Tam Sistem Taraması', exact: true })).toHaveCount(0);
+  await expect(page.locator('.infra-grid')).toHaveCount(0);
   await assertLayout(page, 'critical workflows/settings');
 });
 
