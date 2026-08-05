@@ -27,15 +27,16 @@ function invokeError(error: unknown, command: string): Error {
   if (error instanceof Error && error.message.trim()) return error;
   if (typeof error === 'string' && error.trim()) return new Error(error.trim());
   if (error && typeof error === 'object') {
-    const candidate = error as { message?: unknown; error?: unknown };
-    if (typeof candidate.message === 'string' && candidate.message.trim()) return new Error(candidate.message.trim());
-    if (typeof candidate.error === 'string' && candidate.error.trim()) return new Error(candidate.error.trim());
+    const candidate = error as { message?: unknown; error?: unknown; details?: unknown };
+    for (const value of [candidate.message, candidate.error, candidate.details]) {
+      if (typeof value === 'string' && value.trim()) return new Error(value.trim());
+    }
     try {
       const encoded = JSON.stringify(error);
       if (encoded && encoded !== '{}') return new Error(encoded);
     } catch { /* use the safe fallback below */ }
   }
-  return new Error(`Windows işlemi tamamlanamadı (${command}).`);
+  return new Error(`Windows bağlantı işlemi ayrıntı döndürmeden başarısız oldu (${command}).`);
 }
 
 async function requiredInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
