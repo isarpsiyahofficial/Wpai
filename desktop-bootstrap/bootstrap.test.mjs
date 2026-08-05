@@ -75,6 +75,19 @@ function setupPayload(overrides = {}) {
   };
 }
 
+test('engine emits parseable JSON before any Cloudflare network request', async () => {
+  const result = await runBootstrap('http://127.0.0.1:1', {
+    action: 'invalid-runtime-self-test',
+    accountId: ACCOUNT_ID,
+    apiToken: TOKEN
+  });
+  assert.notEqual(result.code, 0);
+  assert.equal(result.body.ok, false);
+  assert.match(result.body.error, /Geçersiz Cloudflare bağlantı işlemi/);
+  assert.equal(result.body.error.includes(TOKEN), false);
+  assert.doesNotMatch(result.stderr, /EISDIR|lstat/);
+});
+
 test('healthy existing WPAI installation connects without npm, Wrangler or account-settings permission', async () => {
   const requested = [];
   await withServer((request, response) => {
