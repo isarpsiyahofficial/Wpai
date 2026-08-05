@@ -120,9 +120,15 @@ def validate_e2e_gates() -> None:
         if required not in browser:
             raise AssertionError(f"Responsive browser coverage missing: {required}")
     offline = (ROOT / "tests/e2e/offline-desktop.spec.mjs").read_text("utf-8")
-    for required in ("offline local knowledge mode", "faiss_search_text", "Müşteri mesajı gönderme"):
+    for required in (
+        "offline startup stays in Settings",
+        "removing a saved connection keeps it removed",
+        "Cloudflare Bağlantısı",
+        "Bağlantıyı Kaldır",
+        "Yerel Bilgi Modu"
+    ):
         if required not in offline:
-            raise AssertionError(f"Offline desktop coverage missing: {required}")
+            raise AssertionError(f"Desktop connection lifecycle coverage missing: {required}")
     smoke = (ROOT / "tests/e2e/live-worker-smoke.mjs").read_text("utf-8")
     for required in (
         "health-and-security-headers", "auth-and-csrf", "contacts-and-csv",
@@ -213,6 +219,12 @@ def validate_product_scope() -> None:
     app = (ROOT / "src/frontend/App.tsx").read_text("utf-8")
     if "campaign" in app.lower() or "kampanya" in app.lower():
         raise AssertionError("Campaign navigation must not be present")
+    for forbidden in ("Yerel Bilgi Modu", "OfflineDesktopPage", "phase: 'offline'", "Cloudflare Kurulumu ve Onarımı"):
+        if forbidden in app:
+            raise AssertionError(f"Superseded desktop connection flow returned: {forbidden}")
+    for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "Bağlantıyı Kaldır"):
+        if required not in app:
+            raise AssertionError(f"Settings-only connection flow missing: {required}")
     api = "\n".join((ROOT / path).read_text("utf-8") for path in (
         "src/worker/api.ts", "src/worker/extendedApi.ts", "src/worker/trainingApi.ts"
     ))
@@ -235,9 +247,15 @@ def validate_product_scope() -> None:
         if required not in ai:
             raise AssertionError(f"Scoped retrieval capability missing: {required}")
     settings = (ROOT / "src/frontend/pages/settings.tsx").read_text("utf-8")
-    for label in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "WhatsApp Business API", "Parola Değiştir"):
+    for label in (
+        "Cloudflare Bağlantısı", "WhatsApp / Meta Bağlantısı", "Bağlantı Bilgisini Güncelle",
+        "Bağlantıyı Kaldır", "Bağlı", "Parola Değiştir"
+    ):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
+    for forbidden in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "Account ID<input"):
+        if forbidden in settings:
+            raise AssertionError(f"Technical connection control must not be exposed: {forbidden}")
     pages_index = (ROOT / "src/frontend/pages/index.ts").read_text("utf-8")
     if "export { DashboardPage, ReportsPage } from './dashboardReports';" not in pages_index:
         raise AssertionError("Dashboard and reports must use the transparent Neuron views")
@@ -282,4 +300,4 @@ if __name__ == "__main__":
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: binding specification resources, forward migrations, scoped RAG, training lifecycle, locked dependencies and existing product gates are consistent.")
+    print("Static validation passed: Settings-only persistent Cloudflare/Meta connection lifecycle and all existing product gates are consistent.")
