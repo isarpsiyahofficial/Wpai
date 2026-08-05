@@ -66,12 +66,26 @@ fn resolve_token(api_token: Option<String>) -> Result<(String, bool), String> {
     Ok((stored, false))
 }
 
+fn node_compatible_path(path: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let value = path.as_os_str().to_string_lossy();
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{}", rest));
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn bootstrap_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let root = app
+    let resource_dir = app
         .path()
         .resource_dir()
-        .map_err(|_| "WPAI paket kaynakları bulunamadı.".to_string())?
-        .join("cloudflare-bootstrap");
+        .map_err(|_| "WPAI paket kaynakları bulunamadı.".to_string())?;
+    let root = node_compatible_path(&resource_dir.join("cloudflare-bootstrap"));
     if !root.join("bootstrap.mjs").is_file() || !root.join("runtime").join("node.exe").is_file() {
         return Err("Cloudflare kurulum motoru Windows paketinde eksik.".into());
     }
@@ -98,11 +112,11 @@ fn prepare_project(app: &AppHandle, root: &Path) -> Result<PathBuf, String> {
     if !source.join("package-lock.json").is_file() || !source.join("wrangler.jsonc").is_file() {
         return Err("Cloudflare dağıtım kaynakları Windows paketinde eksik.".into());
     }
-    let work_root = app
+    let app_data = app
         .path()
         .app_data_dir()
-        .map_err(|_| "WPAI veri klasörü bulunamadı.".to_string())?
-        .join("cloudflare-bootstrap");
+        .map_err(|_| "WPAI veri klasörü bulunamadı.".to_string())?;
+    let work_root = node_compatible_path(&app_data.join("cloudflare-bootstrap"));
     let destination = work_root.join("project");
     if destination.exists() {
         fs::remove_dir_all(&destination).map_err(|_| "Eski Cloudflare kurulum çalışma alanı temizlenemedi.".to_string())?;
@@ -120,31 +134,27 @@ fn sanitize(mut value: String, secrets: &[&str]) -> String {
     value.replace(['\r', '\n'], " ").chars().take(1800).collect()
 }
 
-fn run_engine(
-    app: &AppHandle,
-    mut payload: Value,
+fn execute_engine(
+    node_path: &Path,
+    script_path: &Path,
+    root_path: &Path,
+    project_path: &Path,
+    payload: Value,
     token: &str,
     password: Option<&str>,
-    needs_project: bool,
 ) -> Result<Value, String> {
-    let root = bootstrap_root(app)?;
-    let project = if needs_project {
-        prepare_project(app, &root)?
-    } else {
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "WPAI veri klasörü bulunamadı.".to_string())?
-            .join("cloudflare-bootstrap")
-            .join("project")
-    };
-    payload["apiToken"] = Value::String(token.to_string());
+    let node_path = node_compatible_path(node_path);
+    let script_path = node_compatible_path(script_path);
+    let root_path = node_compatible_path(root_path);
+    let project_path = node_compatible_path(project_path);
     let input = serde_json::to_vec(&payload).map_err(|_| "Cloudflare kurulum isteği hazırlanamadı.".to_string())?;
 
-    let mut command = Command::new(root.join("runtime").join("node.exe"));
+    let mut command = Command::new(&node_path);
     command
-        .arg(root.join("bootstrap.mjs"))
-        .env("WPAI_BOOTSTRAP_ROOT", &root)
-        .env("WPAI_PROJECT_DIR", &project)
+        .arg(&script_path)
+        .current_dir(&root_path)
+        .env("WPAI_BOOTSTRAP_ROOT", &root_path)
+        .env("WPAI_PROJECT_DIR", &project_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -153,7 +163,12 @@ fn run_engine(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let mut child = command.spawn().map_err(|_| "Cloudflare kurulum motoru başlatılamadı.".to_string())?;
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "Cloudflare kurulum motoru başlatılamadı: {}",
+            sanitize(error.to_string(), &[token, password.unwrap_or("")])
+        )
+    })?;
     child
         .stdin
         .take()
@@ -166,7 +181,14 @@ fn run_engine(
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let parsed = serde_json::from_str::<Value>(&stdout).map_err(|_| {
-        let detail = sanitize(String::from_utf8_lossy(&output.stderr).to_string(), &[token, password.unwrap_or("")]);
+        let detail = sanitize(
+            format!(
+                "stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            &[token, password.unwrap_or("")],
+        );
         format!("Cloudflare kurulum cevabı okunamadı. {detail}")
     })?;
     if !output.status.success() || parsed.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -177,6 +199,35 @@ fn run_engine(
         return Err(sanitize(message.to_string(), &[token, password.unwrap_or("")]));
     }
     Ok(parsed)
+}
+
+fn run_engine(
+    app: &AppHandle,
+    mut payload: Value,
+    token: &str,
+    password: Option<&str>,
+    needs_project: bool,
+) -> Result<Value, String> {
+    let root = bootstrap_root(app)?;
+    let project = if needs_project {
+        prepare_project(app, &root)?
+    } else {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "WPAI veri klasörü bulunamadı.".to_string())?;
+        node_compatible_path(&app_data.join("cloudflare-bootstrap").join("project"))
+    };
+    payload["apiToken"] = Value::String(token.to_string());
+    execute_engine(
+        &root.join("runtime").join("node.exe"),
+        &root.join("bootstrap.mjs"),
+        &root,
+        &project,
+        payload,
+        token,
+        password,
+    )
 }
 
 #[tauri::command]
@@ -261,7 +312,9 @@ pub fn cloudflare_forget() -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_account_id, validate_api_token, ACCOUNT_ID};
+    use super::{execute_engine, node_compatible_path, validate_account_id, validate_api_token, ACCOUNT_ID};
+    use serde_json::json;
+    use std::{path::PathBuf, process::Command};
 
     #[test]
     fn accepts_only_the_bound_cloudflare_account() {
@@ -274,5 +327,59 @@ mod tests {
         assert!(validate_api_token(&"a".repeat(40)).is_ok());
         assert!(validate_api_token("short").is_err());
         assert!(validate_api_token(&format!("{} ", "a".repeat(40))).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn strips_windows_verbatim_prefixes_before_node_execution() {
+        assert_eq!(
+            node_compatible_path(PathBuf::from(r"\\?\C:\Users\tester\WPAI").as_path()),
+            PathBuf::from(r"C:\Users\tester\WPAI")
+        );
+        assert_eq!(
+            node_compatible_path(PathBuf::from(r"\\?\UNC\server\share\WPAI").as_path()),
+            PathBuf::from(r"\\server\share\WPAI")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn packaged_node_entrypoint_resolves_from_verbatim_paths() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repository_root = manifest_dir.parent().expect("repository root");
+        let script = repository_root.join("desktop-bootstrap").join("bootstrap.mjs");
+        assert!(script.is_file(), "bootstrap.mjs must exist for the Windows runtime test");
+
+        let where_output = Command::new("where.exe")
+            .arg("node.exe")
+            .output()
+            .expect("where.exe node.exe must run");
+        assert!(where_output.status.success(), "Node.js must be available on the Windows test runner");
+        let node = String::from_utf8_lossy(&where_output.stdout)
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .map(PathBuf::from)
+            .expect("node.exe path");
+
+        let verbatim_root = PathBuf::from(format!(r"\\?\{}", repository_root.display()));
+        let verbatim_script = PathBuf::from(format!(r"\\?\{}", script.display()));
+        let error = execute_engine(
+            &node,
+            &verbatim_script,
+            &verbatim_root,
+            &verbatim_root,
+            json!({
+                "action": "invalid-runtime-self-test",
+                "accountId": ACCOUNT_ID,
+                "apiToken": "a".repeat(48)
+            }),
+            &"a".repeat(48),
+            None,
+        )
+        .expect_err("invalid action must be returned as a parsed engine error");
+        assert!(error.contains("Geçersiz Cloudflare bağlantı işlemi"), "unexpected error: {error}");
+        assert!(!error.contains("EISDIR"), "Node received an incompatible verbatim path: {error}");
+        assert!(!error.contains("cevabı okunamadı"), "engine output was not parsed: {error}");
     }
 }
