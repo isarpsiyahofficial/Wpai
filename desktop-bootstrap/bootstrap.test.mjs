@@ -10,6 +10,8 @@ const SCRIPT = path.join(HERE, 'bootstrap.mjs');
 const ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
 const D1_ID = '81983219-f57b-487b-8144-7c70bf9b1fe2';
 const TOKEN = 't'.repeat(48);
+const ACCOUNT_TOKEN = `cfat_${'a'.repeat(44)}`;
+const GLOBAL_KEY = `cfk_${'g'.repeat(44)}`;
 
 function cloudflareSuccess(result) {
   return JSON.stringify({ success: true, errors: [], messages: [], result });
@@ -124,6 +126,49 @@ test('healthy existing WPAI installation connects without npm, Wrangler or accou
   });
 });
 
+test('account-owned API token uses the account verification endpoint and completes setup', async () => {
+  const requested = [];
+  await withServer((request, response) => {
+    requested.push(`${request.method} ${request.url}`);
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === `/accounts/${ACCOUNT_ID}/tokens/verify`) return response.end(cloudflareSuccess({ status: 'active', id: 'account-token-id' }));
+    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}`) return response.end(cloudflareSuccess({ uuid: D1_ID, name: 'wa-ai-prod' }));
+    if (request.url === '/health') return response.end(JSON.stringify({ ok: true, components: { worker: true, d1: true } }));
+    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
+      let raw = '';
+      request.on('data', chunk => { raw += chunk; });
+      return request.on('end', () => {
+        const body = JSON.parse(raw);
+        const results = body.sql.includes('COUNT(*)') ? [{ total: 0 }] : [];
+        response.end(cloudflareSuccess([{ success: true, results, meta: { changes: body.sql.includes('INSERT INTO admins') ? 1 : 0 } }]));
+      });
+    }
+    if (request.url === '/api/auth/desktop/login') return response.end(apiSuccess({
+      admin: { id: 'admin-1', name: 'İbrahim', email: 'isarpsiyah@gmail.com', role: 'owner' },
+      accessToken: 'a'.repeat(64), refreshToken: 'r'.repeat(64)
+    }));
+    if (request.url === '/api/auth/desktop/logout') return response.end(apiSuccess({ loggedOut: true }));
+    response.statusCode = 404;
+    response.end(JSON.stringify({ success: false, errors: [{ code: 404, message: 'unexpected route' }] }));
+  }, async baseUrl => {
+    const result = await runBootstrap(baseUrl, setupPayload({ apiToken: ACCOUNT_TOKEN }));
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.body.ok, true);
+    assert.equal(result.body.mode, 'connect_existing');
+    assert.equal(result.body.report.tokenType, 'account');
+    assert.equal(requested.includes('GET /user/tokens/verify'), false);
+    assert.equal(requested.includes(`GET /accounts/${ACCOUNT_ID}/tokens/verify`), true);
+  });
+});
+
+test('global API key is rejected before a Cloudflare request is attempted', async () => {
+  const result = await runBootstrap('http://127.0.0.1:1', setupPayload({ apiToken: GLOBAL_KEY }));
+  assert.notEqual(result.code, 0);
+  assert.equal(result.body.ok, false);
+  assert.match(result.body.error, /Global API Key desteklenmiyor/);
+  assert.doesNotMatch(result.stderr, /ECONNREFUSED/);
+});
+
 test('invalid token returns the real Cloudflare error instead of a generic connection failure', async () => {
   await withServer((_request, response) => {
     response.statusCode = 403;
@@ -133,7 +178,8 @@ test('invalid token returns the real Cloudflare error instead of a generic conne
     const result = await runBootstrap(baseUrl, setupPayload());
     assert.notEqual(result.code, 0);
     assert.equal(result.body.ok, false);
-    assert.match(result.body.error, /API token doğrulaması başarısız \[10000\]: Authentication error/);
+    assert.match(result.body.error, /Cloudflare API tokeni doğrulanamadı/);
+    assert.match(result.body.error, /Authentication error/);
     assert.equal(result.body.error.includes(TOKEN), false);
   });
 });

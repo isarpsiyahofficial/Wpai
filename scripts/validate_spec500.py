@@ -58,8 +58,8 @@ def validate_versions_and_brand() -> None:
     lock = json.loads(text("package-lock.json"))
     tauri = json.loads(text("src-tauri/tauri.conf.json"))
     version = package["version"]
-    if version != "1.3.4":
-        raise AssertionError(f"Expected final audited version 1.3.4, got {version}")
+    if version != "1.3.5":
+        raise AssertionError(f"Expected final audited version 1.3.5, got {version}")
     if lock.get("version") != version or lock.get("packages", {}).get("", {}).get("version") != version:
         raise AssertionError("npm package and lock versions differ")
     if tauri.get("version") != version:

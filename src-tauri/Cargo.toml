@@ -1,6 +1,6 @@
 [package]
 name = "wpai-desktop"
-version = "1.3.4"
+version = "1.3.5"
 description = "WPAI WhatsApp ve AI yönetim paneli Windows istemcisi"
 authors = ["WPAI"]
 edition = "2021"

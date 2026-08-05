@@ -88,10 +88,34 @@ async function cf(token, route, init = {}, label = 'Cloudflare isteği') {
   return body.result;
 }
 
+function tokenVerificationRoutes(token) {
+  if (token.startsWith('cfk_')) {
+    throw new Error('Global API Key desteklenmiyor. Cloudflare User API Token veya Account API Token kullanın.');
+  }
+  if (token.startsWith('cfat_')) {
+    return [{ type: 'account', route: `/accounts/${MANIFEST.accountId}/tokens/verify`, label: 'Account API Token doğrulaması' }];
+  }
+  if (token.startsWith('cfut_')) {
+    return [{ type: 'user', route: '/user/tokens/verify', label: 'User API Token doğrulaması' }];
+  }
+  return [
+    { type: 'user', route: '/user/tokens/verify', label: 'User API Token doğrulaması' },
+    { type: 'account', route: `/accounts/${MANIFEST.accountId}/tokens/verify`, label: 'Account API Token doğrulaması' }
+  ];
+}
+
 async function verifyToken(token) {
-  const verified = await cf(token, '/user/tokens/verify', {}, 'API token doğrulaması');
-  if (verified?.status !== 'active') throw new Error(`Cloudflare API tokeni aktif değil (${verified?.status ?? 'durum bilinmiyor'}).`);
-  return verified;
+  const failures = [];
+  for (const candidate of tokenVerificationRoutes(token)) {
+    try {
+      const verified = await cf(token, candidate.route, {}, candidate.label);
+      if (verified?.status === 'active') return { ...verified, tokenType: candidate.type };
+      failures.push(`${candidate.label}: token durumu ${verified?.status ?? 'bilinmiyor'}`);
+    } catch (error) {
+      failures.push(safeError(error));
+    }
+  }
+  throw new Error(`Cloudflare API tokeni doğrulanamadı. User API Token ve Account API Token desteklenir. ${failures.join(' | ')}`);
 }
 
 async function verifyProductionD1(token) {
@@ -408,7 +432,7 @@ async function verifyDesktopLogin(input) {
       password: input.adminPassword,
       deviceId,
       deviceName: 'WPAI Windows Bağlantı Doğrulaması',
-      appVersion: '1.3.4'
+      appVersion: '1.3.5'
     })
   });
   if (!session?.accessToken || !session?.refreshToken || session.admin?.email !== input.adminEmail.trim().toLowerCase()) {
@@ -446,6 +470,7 @@ async function connectionCheck(token) {
     accountId: MANIFEST.accountId,
     checkedAt: new Date().toISOString(),
     tokenStatus: verified.status,
+    tokenType: verified.tokenType,
     database: { name: database.name, id: database.uuid, ready: true },
     worker: { url: WORKER_URL, ready: worker.ready, error: worker.error }
   };

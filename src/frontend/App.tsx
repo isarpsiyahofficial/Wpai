@@ -395,16 +395,16 @@ function DesktopConnectionsPage({
                 <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bağlantıyı Kaldır</button>
               </div>
               {showUpdate && <form className="form-stack" onSubmit={updateConnection}>
-                <label>Yeni Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
+                <label>Yeni Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
                 <div className="form-actions"><button className="button primary" disabled={busy || !online}>Doğrula ve Güncelle</button><button type="button" className="button secondary" onClick={() => setShowUpdate(false)}>Vazgeç</button></div>
               </form>}
             </> : <form className="form-grid" onSubmit={setupConnection}>
-              <label className="wide">Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
+              <label className="wide">Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
               <label>Yönetici adı<input name="name" required minLength={2} /></label>
               <label>Yönetici e-postası<input name="email" type="email" required autoComplete="username" /></label>
               <label>Yeni parola<input name="password" type="password" required minLength={6} autoComplete="new-password" /></label>
               <label>Parola tekrarı<input name="confirm" type="password" required minLength={6} autoComplete="new-password" /></label>
-              <p className="safe-note wide">Bağlantı doğrulandığında bu bilgisayarda güvenli biçimde saklanır. Uygulamayı kapatıp açtığınızda bağlı kalır.</p>
+              <p className="safe-note wide">Cloudflare panelinde oluşturulan User API Token veya Account API Token kullanılabilir. Token ID ya da Global API Key kullanmayın. Bağlantı doğrulandığında bu bilgisayarda güvenli biçimde saklanır ve uygulama yeniden açıldığında bağlı kalır.</p>
               <div className="form-actions wide"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur'}</button></div>
             </form>}
           </section>
