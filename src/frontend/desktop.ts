@@ -23,9 +23,28 @@ function available(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+function invokeError(error: unknown, command: string): Error {
+  if (error instanceof Error && error.message.trim()) return error;
+  if (typeof error === 'string' && error.trim()) return new Error(error.trim());
+  if (error && typeof error === 'object') {
+    const candidate = error as { message?: unknown; error?: unknown };
+    if (typeof candidate.message === 'string' && candidate.message.trim()) return new Error(candidate.message.trim());
+    if (typeof candidate.error === 'string' && candidate.error.trim()) return new Error(candidate.error.trim());
+    try {
+      const encoded = JSON.stringify(error);
+      if (encoded && encoded !== '{}') return new Error(encoded);
+    } catch { /* use the safe fallback below */ }
+  }
+  return new Error(`Windows işlemi tamamlanamadı (${command}).`);
+}
+
 async function requiredInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!available()) throw new Error('Bu işlem yalnız WPAI Windows uygulamasında kullanılabilir.');
-  return invoke<T>(command, args);
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw invokeError(error, command);
+  }
 }
 
 export const desktop = {
