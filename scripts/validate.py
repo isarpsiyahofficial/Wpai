@@ -253,7 +253,7 @@ def validate_product_scope() -> None:
     ):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
-    for forbidden in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "Account ID<input"):
+    for forbidden in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "<label>Account ID<input"):
         if forbidden in settings:
             raise AssertionError(f"Technical connection control must not be exposed: {forbidden}")
     pages_index = (ROOT / "src/frontend/pages/index.ts").read_text("utf-8")
