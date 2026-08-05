@@ -10,8 +10,8 @@ Tek işletmeye ait WhatsApp Business görüşmelerini, dosyaları, müşteri iht
 - **Cloudflare Queues:** inbound AI, outbound WhatsApp ve yönetici bildirimleri; ayrı DLQ’lar.
 - **Workers AI + Vectorize:** onaylı işletme bilgisine dayalı production RAG ve yapılandırılmış AI kararları.
 - **React yönetim paneli:** WhatsApp gelen kutusu, kişiler, bilgi bankası, dosyalar, AI kontrolü, bildirimler, raporlar ve ayarlar.
-- **Tauri 2 Windows uygulaması:** production Worker’a bağlanan gerçek Windows programı, Windows Credential Manager ve yerel FAISS sidecar.
-- **FAISS sidecar:** yerel eğitim önizlemesi ve çevrimdışı vektör araması; son kullanıcı Python kurmaz.
+- **Tauri 2 Windows uygulaması:** production Worker’a bağlanan gerçek Windows programı ve Windows Credential Manager.
+- **FAISS sidecar:** arka plandaki indeksleme ve test altyapısıdır; son kullanıcıya teknik FAISS, checksum veya yerel indeks ekranı gösterilmez.
 
 ## Temel güvenlik kuralları
 
@@ -24,8 +24,9 @@ Tek işletmeye ait WhatsApp Business görüşmelerini, dosyaları, müşteri iht
 5. AI ilk deployda kapalıdır. Otomatik yanıt için global ayar, konuşma modu, insan devri, pause ve güncel mesaj kapıları gönderimden hemen önce tekrar kontrol edilir.
 6. R2 public değildir. Dosya erişimi yetkili Worker endpointi ve konuşma ilişkisiyle sınırlıdır.
 7. Meta ve Cloudflare tokenleri kaynak koda, Git’e, D1’e veya loglara yazılmaz.
-8. Cloudflare onarım motoru kaynak silmez, DNS değiştirmez, ücretli plan açmaz ve proje dışı kaynaklara dokunmaz.
-9. Kampanya gönderim çalışma akışı ürün arayüzünden ve aktif API’den kaldırılmıştır.
+8. Cloudflare bağlantısı yalnız Ayarlar → Bağlantılar bölümünden kullanıcı tarafından kurulur, doğrulanır, güncellenir veya kaldırılır.
+9. Bağlantıyı kaldırmak D1, R2, müşteri kayıtları veya konuşma geçmişini silmez.
+10. Kampanya gönderim çalışma akışı ürün arayüzünden ve aktif API’den kaldırılmıştır.
 
 ## Sabit Cloudflare manifesti
 
@@ -43,7 +44,7 @@ Tek işletmeye ait WhatsApp Business görüşmelerini, dosyaları, müşteri iht
 | AI DLQ | `wa-ai-dlq` |
 | Outbound DLQ | `wa-outbound-dlq` |
 
-Ayarlar → Cloudflare Kurulum ve Onarım ekranı bu manifesti gerçek hesapla karşılaştırır. Aynı adlı fakat farklı kimlikteki D1 gibi riskli sapmalar otomatik düzeltilmez; veri kaybını önlemek için incelemeye bırakılır.
+Bu manifest uygulamanın iç doğrulama ve dağıtım sınırıdır. Account ID, D1 ID, kuyruk isimleri ve benzeri teknik kimlikler normal kullanıcı arayüzünde gösterilmez.
 
 ## Gereksinimler
 
@@ -86,14 +87,14 @@ ADMIN_BOOTSTRAP_TOKEN
 ## İlk yönetici kurulumu
 
 1. Secret olarak `ADMIN_BOOTSTRAP_TOKEN` tanımlanır.
-2. Panel açıldığında aktif admin yoksa ilk kurulum ekranı görünür.
+2. Cloudflare bağlantısı Windows uygulamasında Ayarlar → Bağlantılar bölümünden kullanıcı tarafından kurulur.
 3. Yönetici adını, e-postasını ve kendi parolasını belirler.
 4. İlk admin oluştuktan sonra bootstrap endpointi kapanır.
 5. Parola Ayarlar → Parola Değiştir ekranından değiştirilebilir; diğer oturumlar iptal edilir.
 
 ## Meta WhatsApp kurulumu
 
-Panelde Ayarlar → WhatsApp Business API bölümüne Meta bilgileri girilir ve gerçek Graph API isteğiyle doğrulanır.
+Panelde **Ayarlar → Bağlantılar → WhatsApp / Meta Bağlantısı** bölümüne Meta bilgileri girilir ve gerçek Graph API isteğiyle doğrulanır. Başarılı bağlantı **Bağlı** olarak görünür ve aynı bölümden doğrulanabilir, güncellenebilir, geçici olarak durdurulabilir veya kaldırılabilir.
 
 Webhook URL:
 
@@ -109,20 +110,21 @@ Meta uygulamasında `messages` webhook alanına abone olunmalıdır. İlk ileti�
 - Asistanın cevabı otomatik olarak işletme gerçeğine dönüşmez.
 - Yönetici eğitim taslağını düzenler ve onaylar.
 - Onaylı kayıt D1’de `approved` olur, embedding üretilir ve Vectorize’a işlenir.
-- Windows uygulamasında aynı eğitim yerel FAISS’e de yazılabilir.
+- Arka plandaki indeks bileşenleri kullanıcıya teknik yönetim ekranı olarak sunulmaz.
 - Müşteriden gelen hiçbir iddia otomatik genel bilgiye dönüştürülmez.
 
-## Cloudflare kurulum ve onarım
+## Cloudflare bağlantı yönetimi
 
-Panelin Cloudflare yönetim ekranı:
+Windows uygulamasındaki bağlantı yaşam döngüsü:
 
-- tokeni ve Account ID’yi doğrular,
-- D1, R2, Queue, Worker ve Vectorize durumunu tarar,
-- yalnız eksik ve güvenle oluşturulabilir WPAI kaynaklarını kurar,
-- yanlış D1 kimliği veya yanlış vektör boyutu gibi riskli durumları otomatik değiştirmez,
-- kaynak silme, DNS, domain ve ücretli plan işlemlerini yapmaz.
+1. Uygulama normal Ayarlar → Bağlantılar ekranını açar.
+2. Kullanıcı Cloudflare API tokenini kendisi girer ve **Bağlantıyı Kur** işlemini başlatır.
+3. Doğrulanan token Windows Credential Manager’da saklanır.
+4. Uygulama kapatılıp yeniden açıldığında bağlantı **Bağlı** görünmeye devam eder.
+5. Kullanıcı aynı bölümden **Bağlantıyı Doğrula**, **Bağlantı Bilgisini Güncelle** veya **Bağlantıyı Kaldır** işlemlerini yapabilir.
+6. Bağlantıyı kaldırmak yalnız bu bilgisayardaki credential kaydını kaldırır; D1, R2, işletme bilgileri, müşteriler ve konuşmalar korunur.
 
-Web sürümünde token yalnız sayfa belleğinde tutulur. Windows sürümünde kullanıcı seçerse Windows Credential Manager’da saklanır.
+Bağlantı yoksa bulut gerektiren işlemler teknik teşhis ekranı açmadan Ayarlar → Bağlantılar bölümüne yönlendirir. Uygulamada sabit Account ID alanı, altyapı tarama kartları, FAISS boyutu veya checksum gibi geliştirici ayrıntıları gösterilmez.
 
 ## Testler ve kalite kapıları
 
@@ -149,13 +151,15 @@ Zorunlu test kapsamı:
 - AI global/konuşma/insan devri/stale-message kapıları,
 - manuel mesaj idempotency’si,
 - dosya magic-byte doğrulaması,
-- Cloudflare yıkıcı olmayan onarım sınırı,
-- FAISS boyut, arama ve metadata testleri,
+- Cloudflare bağlantısının kurulması, kalıcı tutulması, doğrulanması, güncellenmesi ve kaldırılması,
+- bağlantı kaldırıldığında bulut verilerinin korunması,
+- teknik yerel indeks ekranlarının son kullanıcı akışında bulunmaması,
+- FAISS arka plan boyut, arama ve metadata testleri,
 - React production build,
 - Wrangler dry-run,
 - Windows Rust compile ve NSIS `setup.exe` üretimi.
 
-PR, `.github/workflows/ci.yml` ve `.github/workflows/windows-desktop.yml` yeşil olmadan birleştirilmez.
+PR, `.github/workflows/ci.yml`, `.github/workflows/e2e-live-scenarios.yml` ve `.github/workflows/windows-desktop.yml` yeşil olmadan birleştirilmez.
 
 ## Production deploy
 
@@ -171,34 +175,37 @@ Workflow `DEPLOY-WPAI` onayı, GitHub `production` environment onayı ve `CLOUDF
 
 Windows workflow’u:
 
-1. FAISS testlerini çalıştırır.
+1. FAISS arka plan testlerini çalıştırır.
 2. `faiss-service.exe` sidecarını PyInstaller ile üretir.
 3. TypeScript ve Rust compile kontrolü yapar.
 4. Tauri NSIS `setup.exe` üretir.
-5. Kurulum dosyasını GitHub Actions artifactı olarak yayınlar.
+5. Gerçek kurulum, uygulamayı açma, tek örnek ve kaldırma yaşam döngüsünü doğrular.
+6. Kurulum dosyasını GitHub Actions artifactı olarak yayınlar.
 
-EXE yalnız bir tarayıcı kısayolu değildir; güvenli Windows credential saklama ve yerel FAISS komutları Tauri backendinde uygulanmıştır.
+EXE yalnız bir tarayıcı kısayolu değildir; Windows credential saklama ve bağlantı yaşam döngüsü Tauri backendinde uygulanmıştır.
 
 ## Sorun giderme
 
-- `/health` 503: D1 veya zorunlu bindinglerden biri çalışmıyordur.
-- Meta `not_configured`: Ayarlar ekranından Meta bilgileri girilip doğrulanmalıdır.
+- Bağlantı yok: Ayarlar → Bağlantılar bölümünden Cloudflare bağlantısını kurun.
+- Bağlantı kayıtlı fakat doğrulanamıyor: interneti kontrol edip **Bağlantıyı Doğrula** işlemini kullanın.
+- Meta `not_configured`: Ayarlar → Bağlantılar → WhatsApp / Meta Bağlantısı bölümünden bilgileri girip doğrulayın.
 - İlk mesaj gönderilemiyor: Meta şablonu `APPROVED` değildir veya bağlantı durdurulmuştur.
 - Serbest mesaj engelleniyor: müşterinin son inbound mesajından itibaren 24 saatlik pencere kapanmıştır.
 - AI yanıt vermiyor: bu güvenli varsayılandır; global mod, konuşma modu, insan devri ve pause durumları kontrol edilmelidir.
-- Cloudflare onarımı bir bileşeni atlıyor: bileşen yıkıcı işlem veya manuel inceleme gerektiriyordur.
 
 ## Veri koruma
 
 Yönetici kişi bazında D1 verilerini dışa aktarabilir. Kalıcı silme işlemi tam telefon numarasıyla açık doğrulama ister; konuşmaya bağlı R2 dosyalarını da siler. Audit loglar secret, parola veya token içermez.
 
-## Çevrimdışı Windows modu
+## İnternet kesintisi davranışı
 
-Windows istemcisi internet bağlantısı kurulamadığında yalnız daha önce senkronize edilmiş ve yönetici tarafından onaylanmış yerel bilgileri aramaya açar. Bu modda mesaj gönderimi, Meta çağrıları, kayıt değişiklikleri ve bulut senkronizasyonu kapalıdır. Yerel arama sonucu bulutun güncel durumu gibi gösterilmez.
+İnternet kesildiğinde kayıtlı Cloudflare bağlantısı silinmez. Uygulama Ayarlar → Bağlantılar bölümünde bağlantının kayıtlı durumunu ve internetin beklenmekte olduğunu sade biçimde gösterir. Mesaj gönderme, kayıt değiştirme ve diğer bulut işlemleri internet yeniden gelene kadar kapalıdır.
+
+İnternet kesintisi ayrı bir “yerel bilgi modu” açmaz; son kullanıcıya FAISS, checksum, indeks sürümü veya yerel indeks temizleme kontrolleri gösterilmez.
 
 ## 500 maddelik şartname kanıtı
 
-Bağlayıcı şartnamenin SHA-256 değeri ve 1–500 arasındaki her madde için kaynak/test yolları `docs/SPEC-500-EVIDENCE.json` içinde tutulur. `scripts/validate_spec500.py` tam 500 kimliği, kanıt yollarını, sürüm/marka senkronizasyonunu, çevrimdışı yerel aramayı, eğitim etki karşılaştırmasını, indeks istatistiklerini ve Windows kaldırıcı kapılarını doğrular.
+Bağlayıcı şartnamenin SHA-256 değeri ve 1–500 arasındaki her madde için kaynak/test yolları `docs/SPEC-500-EVIDENCE.json` içinde tutulur. `scripts/validate_spec500.py` tam 500 kimliği, kanıt yollarını, sürüm/marka senkronizasyonunu, Ayarlar’a bağlı bağlantı yaşam döngüsünü, eğitim etki karşılaştırmasını, indeks altyapısını ve Windows kaldırıcı kapılarını doğrular.
 
 Ayrıntılı kılavuzlar:
 
