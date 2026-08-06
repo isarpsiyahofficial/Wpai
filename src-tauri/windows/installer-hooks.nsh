@@ -1,5 +1,10 @@
 !include "FileFunc.nsh"
 
+!macro NSIS_HOOK_PREINSTALL
+  nsExec::ExecToLog 'taskkill /F /T /IM wpai-desktop.exe'
+  Sleep 1500
+!macroend
+
 !macro NSIS_HOOK_PREUNINSTALL
   ${GetParameters} $R0
   ${GetOptions} $R0 "/PURGELOCALCACHE" $R1
