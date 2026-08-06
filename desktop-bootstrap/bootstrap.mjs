@@ -75,13 +75,7 @@ async function repairLegacyAdminSchema(input) {
   await d1Query(token, 'SELECT deleted_at FROM admins LIMIT 0').catch(() => undefined);
 }
 
-async function countEvidence(token, sql, params) {
-  const normalized = Array.isArray(params) ? params : [params];
-  const rows = resultRows(await d1Query(token, sql, normalized));
-  return Number(rows[0]?.total ?? 0);
-}
-
-async function recoverOrphanedOwner(input) {
+async function recoverExistingOwner(input) {
   if (input?.action !== 'setup') return false;
   const token = input?.apiToken;
   const name = typeof input?.adminName === 'string' ? input.adminName.trim() : '';
@@ -108,24 +102,30 @@ async function recoverOrphanedOwner(input) {
   const owner = owners[0];
   if (!owner?.id || !owner?.email || !owner?.password_hash) return false;
   if (String(owner.email).toLowerCase() === email && verifiesEncodedPassword(password, owner.password_hash)) return false;
-  if (owner.last_login_at) return false;
 
   try {
-    const [adminSessions, desktopSessions, auditHistory, conflictingEmail] = await Promise.all([
-      countEvidence(token, 'SELECT COUNT(*) AS total FROM admin_sessions WHERE admin_id=?', owner.id),
-      countEvidence(token, 'SELECT COUNT(*) AS total FROM desktop_sessions WHERE admin_id=?', owner.id),
-      countEvidence(token, 'SELECT COUNT(*) AS total FROM audit_logs WHERE actor_admin_id=? OR (target_type=\'admin\' AND target_id=?)', [owner.id, owner.id]),
-      d1Query(token, 'SELECT id FROM admins WHERE email=? AND id<>? LIMIT 1', [email, owner.id])
-    ]);
-    if (adminSessions !== 0 || desktopSessions !== 0 || auditHistory !== 0 || resultRows(conflictingEmail).length !== 0) return false;
+    const conflicting = resultRows(await d1Query(token,
+      'SELECT id,status,deleted_at FROM admins WHERE email=? AND id<>? LIMIT 1',
+      [email, owner.id]));
+    if (conflicting.length !== 0) return false;
 
     const now = new Date().toISOString();
+    await d1Query(token,
+      'UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL',
+      [now, owner.id]);
+    await d1Query(token,
+      'UPDATE desktop_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL',
+      [now, owner.id]);
+    await d1Query(token,
+      "UPDATE desktop_devices SET status='revoked',revoked_at=?,last_seen_at=? WHERE admin_id=? AND revoked_at IS NULL",
+      [now, now, owner.id]);
+
     const updated = await d1Query(token, `
 UPDATE admins SET
   name=?, email=?, password_hash=?, role='owner', status='active',
   failed_login_count=0, locked_until=NULL, last_login_at=NULL,
   updated_at=?, deleted_at=NULL
-WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL AND last_login_at IS NULL
+WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL
 `, [name, email, encodedPasswordHash(password), now, owner.id]);
     const changes = Number(updated?.[0]?.meta?.changes ?? 0);
     if (changes !== 1) return false;
@@ -134,8 +134,8 @@ WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL AND last_
 INSERT INTO audit_logs
   (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
 VALUES
-  (?,?, 'admin.orphan_owner_recovered','admin',?,?,'desktop-bootstrap',?)
-`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email }), now]).catch(() => undefined);
+  (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap',?)
+`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email, sessionsRevoked: true }), now]).catch(() => undefined);
     return true;
   } catch {
     return false;
@@ -146,7 +146,7 @@ const raw = fs.readFileSync(0, 'utf8');
 let input = null;
 try { input = JSON.parse(raw || '{}'); } catch { input = null; }
 await repairLegacyAdminSchema(input).catch(() => undefined);
-await recoverOrphanedOwner(input).catch(() => false);
+await recoverExistingOwner(input).catch(() => false);
 
 const result = spawnSync(process.execPath, [CORE], {
   input: raw,
