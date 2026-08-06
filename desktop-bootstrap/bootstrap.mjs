@@ -57,6 +57,10 @@ function verifiesEncodedPassword(password, encoded) {
   }
 }
 
+function emailHash(email) {
+  return crypto.createHash('sha256').update(String(email).toLowerCase(), 'utf8').digest('base64');
+}
+
 async function repairLegacyAdminSchema(input) {
   if (input?.action !== 'setup') return;
   const token = input?.apiToken;
@@ -119,6 +123,9 @@ async function recoverExistingOwner(input) {
     await d1Query(token,
       "UPDATE desktop_devices SET status='revoked',revoked_at=?,last_seen_at=? WHERE admin_id=? AND revoked_at IS NULL",
       [now, now, owner.id]);
+    await d1Query(token,
+      'DELETE FROM login_attempts WHERE email_hash IN (?,?)',
+      [emailHash(owner.email), emailHash(email)]);
 
     const updated = await d1Query(token, `
 UPDATE admins SET
@@ -135,7 +142,7 @@ INSERT INTO audit_logs
   (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
 VALUES
   (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap',?)
-`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email, sessionsRevoked: true }), now]).catch(() => undefined);
+`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email, sessionsRevoked: true, loginThrottleCleared: true }), now]).catch(() => undefined);
     return true;
   } catch {
     return false;
