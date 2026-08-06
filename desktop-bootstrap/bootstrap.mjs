@@ -75,8 +75,9 @@ async function repairLegacyAdminSchema(input) {
   await d1Query(token, 'SELECT deleted_at FROM admins LIMIT 0').catch(() => undefined);
 }
 
-async function countEvidence(token, sql, id) {
-  const rows = resultRows(await d1Query(token, sql, [id]));
+async function countEvidence(token, sql, params) {
+  const normalized = Array.isArray(params) ? params : [params];
+  const rows = resultRows(await d1Query(token, sql, normalized));
   return Number(rows[0]?.total ?? 0);
 }
 
@@ -113,7 +114,7 @@ async function recoverOrphanedOwner(input) {
     const [adminSessions, desktopSessions, auditHistory, conflictingEmail] = await Promise.all([
       countEvidence(token, 'SELECT COUNT(*) AS total FROM admin_sessions WHERE admin_id=?', owner.id),
       countEvidence(token, 'SELECT COUNT(*) AS total FROM desktop_sessions WHERE admin_id=?', owner.id),
-      countEvidence(token, 'SELECT COUNT(*) AS total FROM audit_logs WHERE actor_admin_id=? OR (target_type=\'admin\' AND target_id=?)', owner.id),
+      countEvidence(token, 'SELECT COUNT(*) AS total FROM audit_logs WHERE actor_admin_id=? OR (target_type=\'admin\' AND target_id=?)', [owner.id, owner.id]),
       d1Query(token, 'SELECT id FROM admins WHERE email=? AND id<>? LIMIT 1', [email, owner.id])
     ]);
     if (adminSessions !== 0 || desktopSessions !== 0 || auditHistory !== 0 || resultRows(conflictingEmail).length !== 0) return false;
