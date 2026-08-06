@@ -18,6 +18,48 @@ function queryError(body, status) {
   return `${item?.code ?? status}: ${item?.message ?? `HTTP ${status}`}`;
 }
 
+async function cloudflareJson(token, route, label) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${route}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(30_000)
+    });
+  } catch (error) {
+    throw new Error(`${label} Cloudflare'a ulaşılamadığı için tamamlanamadı: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const text = (await response.text()).slice(0, 500_000);
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  if (!response.ok || !body?.success) throw new Error(`${label} başarısız: ${queryError(body, response.status)}`);
+  return body.result;
+}
+
+async function verifyToken(token) {
+  if (token.startsWith('cfk_')) {
+    throw new Error('Global API Key desteklenmiyor. Cloudflare User API Token veya Account API Token kullanın.');
+  }
+  const routes = token.startsWith('cfat_')
+    ? [{ route: `/accounts/${ACCOUNT_ID}/tokens/verify`, label: 'Account API Token doğrulaması' }]
+    : token.startsWith('cfut_')
+      ? [{ route: '/user/tokens/verify', label: 'User API Token doğrulaması' }]
+      : [
+          { route: '/user/tokens/verify', label: 'User API Token doğrulaması' },
+          { route: `/accounts/${ACCOUNT_ID}/tokens/verify`, label: 'Account API Token doğrulaması' }
+        ];
+  const failures = [];
+  for (const candidate of routes) {
+    try {
+      const result = await cloudflareJson(token, candidate.route, candidate.label);
+      if (result?.status === 'active') return result;
+      failures.push(`${candidate.label}: token durumu ${result?.status ?? 'bilinmiyor'}`);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  throw new Error(`Cloudflare API tokeni doğrulanamadı. User API Token ve Account API Token desteklenir. ${failures.join(' | ')}`);
+}
+
 async function d1Query(token, sql, params = []) {
   const response = await fetch(`${API_BASE}/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`, {
     method: 'POST',
@@ -226,7 +268,7 @@ LIMIT 2
 
   const owner = owners[0];
   if (!owner?.id || !owner?.email || !owner?.password_hash) {
-    throw new Error('Mevcut yönetici kaydı eksik [admin-recovery-v3].');
+    return { recovered: false, reason: 'owner-record-incomplete' };
   }
   if (String(owner.email).toLowerCase() === email && verifiesEncodedPassword(password, owner.password_hash)) {
     return { recovered: false, reason: 'credentials-valid' };
@@ -270,11 +312,22 @@ let input = null;
 try { input = JSON.parse(raw || '{}'); } catch { input = null; }
 
 try {
+  if (validSetupInput(input)) await verifyToken(input.apiToken);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stdout.write(`${JSON.stringify({ ok: false, error: message })}\n`);
+  process.exit(1);
+}
+
+try {
   await ensureAuthenticationSchema(input);
   await recoverExistingOwner(input);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stdout.write(`${JSON.stringify({ ok: false, error: `Cloudflare yönetici hazırlığı başarısız [admin-recovery-v3]. ${message}` })}\n`);
+  const detail = message.includes('[admin-recovery-v3]')
+    ? message
+    : `Cloudflare tokeni doğrulandı ancak WPAI veritabanı hazırlanamadı. Token izinlerinde D1 Read ve D1 Write bulunmalıdır. ${message}`;
+  process.stdout.write(`${JSON.stringify({ ok: false, error: detail })}\n`);
   process.exit(1);
 }
 
