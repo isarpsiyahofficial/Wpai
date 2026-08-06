@@ -36,6 +36,132 @@ function resultRows(entries) {
   return Array.isArray(entries?.[0]?.results) ? entries[0].results : [];
 }
 
+function validSetupInput(input) {
+  return input?.action === 'setup'
+    && typeof input.apiToken === 'string'
+    && input.apiToken.length >= 30
+    && input.apiToken.length <= 4096
+    && !/\s/.test(input.apiToken);
+}
+
+async function tableColumns(token, table) {
+  return new Set(resultRows(await d1Query(token, `PRAGMA table_info(${table})`)).map(row => String(row.name)));
+}
+
+async function ensureColumns(token, table, definitions) {
+  const columns = await tableColumns(token, table);
+  for (const [name, definition] of definitions) {
+    if (columns.has(name)) continue;
+    try {
+      await d1Query(token, `ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      columns.add(name);
+    } catch (error) {
+      if (!String(error).toLowerCase().includes('duplicate column name')) throw error;
+    }
+  }
+}
+
+async function ensureAuthenticationSchema(input) {
+  if (!validSetupInput(input)) return;
+  const token = input.apiToken;
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS admins (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'owner',
+    status TEXT NOT NULL DEFAULT 'active',
+    failed_login_count INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,
+    last_login_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`);
+  await ensureColumns(token, 'admins', [
+    ['role', "TEXT NOT NULL DEFAULT 'owner'"],
+    ['status', "TEXT NOT NULL DEFAULT 'active'"],
+    ['failed_login_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['locked_until', 'TEXT'],
+    ['last_login_at', 'TEXT'],
+    ['updated_at', "TEXT NOT NULL DEFAULT ''"],
+    ['deleted_at', 'TEXT']
+  ]);
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS admin_sessions (
+    id TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    csrf_token TEXT NOT NULL,
+    user_agent_hash TEXT,
+    ip_hash TEXT,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  )`);
+  await ensureColumns(token, 'admin_sessions', [['revoked_at', 'TEXT']]);
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS login_attempts (
+    id TEXT PRIMARY KEY,
+    email_hash TEXT NOT NULL,
+    ip_hash TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  )`);
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS desktop_devices (
+    id TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    device_hash TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'windows',
+    app_version TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    last_seen_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    UNIQUE(admin_id, device_hash)
+  )`);
+  await ensureColumns(token, 'desktop_devices', [
+    ['app_version', 'TEXT'],
+    ['status', "TEXT NOT NULL DEFAULT 'active'"],
+    ['revoked_at', 'TEXT']
+  ]);
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS desktop_sessions (
+    id TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL REFERENCES desktop_devices(id) ON DELETE CASCADE,
+    admin_session_id TEXT REFERENCES admin_sessions(id) ON DELETE SET NULL,
+    refresh_token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    last_rotated_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  await ensureColumns(token, 'desktop_sessions', [
+    ['admin_session_id', 'TEXT'],
+    ['last_rotated_at', "TEXT NOT NULL DEFAULT ''"],
+    ['revoked_at', 'TEXT']
+  ]);
+
+  await d1Query(token, `CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    actor_admin_id TEXT REFERENCES admins(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    request_id TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id, expires_at)');
+  await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_desktop_sessions_admin ON desktop_sessions(admin_id, expires_at) WHERE revoked_at IS NULL');
+  await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(email_hash, ip_hash, created_at)');
+}
+
 function encodedPasswordHash(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256');
@@ -61,98 +187,66 @@ function emailHash(email) {
   return crypto.createHash('sha256').update(String(email).toLowerCase(), 'utf8').digest('base64');
 }
 
-async function repairLegacyAdminSchema(input) {
-  if (input?.action !== 'setup') return;
-  const token = input?.apiToken;
-  if (typeof token !== 'string' || token.length < 30 || token.length > 4096 || /\s/.test(token)) return;
-  try {
-    await d1Query(token, 'SELECT deleted_at FROM admins LIMIT 0');
-    return;
-  } catch (error) {
-    if (!String(error).toLowerCase().includes('no such column: deleted_at')) return;
-  }
-  try {
-    await d1Query(token, 'ALTER TABLE admins ADD COLUMN deleted_at TEXT');
-  } catch (error) {
-    if (!String(error).toLowerCase().includes('duplicate column name: deleted_at')) return;
-  }
-  await d1Query(token, 'SELECT deleted_at FROM admins LIMIT 0').catch(() => undefined);
-}
-
 async function recoverExistingOwner(input) {
-  if (input?.action !== 'setup') return false;
-  const token = input?.apiToken;
-  const name = typeof input?.adminName === 'string' ? input.adminName.trim() : '';
-  const email = typeof input?.adminEmail === 'string' ? input.adminEmail.trim().toLowerCase() : '';
-  const password = input?.adminPassword;
+  if (!validSetupInput(input)) return false;
+  const token = input.apiToken;
+  const name = typeof input.adminName === 'string' ? input.adminName.trim() : '';
+  const email = typeof input.adminEmail === 'string' ? input.adminEmail.trim().toLowerCase() : '';
+  const password = input.adminPassword;
   if (
-    typeof token !== 'string' || token.length < 30 || token.length > 4096 || /\s/.test(token)
-    || name.length < 2 || name.length > 120
+    name.length < 2 || name.length > 120
     || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     || typeof password !== 'string' || password.length < 6 || password.length > 256
   ) return false;
 
-  let owners;
-  try {
-    owners = resultRows(await d1Query(token,
-      `SELECT id,name,email,password_hash,last_login_at,created_at
-         FROM admins
-        WHERE role='owner' AND status='active' AND deleted_at IS NULL
-        ORDER BY created_at ASC LIMIT 2`));
-  } catch {
-    return false;
-  }
+  const owners = resultRows(await d1Query(token,
+    `SELECT id,name,email,password_hash,last_login_at,created_at
+       FROM admins
+      WHERE role='owner' AND status='active' AND deleted_at IS NULL
+      ORDER BY created_at ASC LIMIT 2`));
   if (owners.length !== 1) return false;
   const owner = owners[0];
   if (!owner?.id || !owner?.email || !owner?.password_hash) return false;
   if (String(owner.email).toLowerCase() === email && verifiesEncodedPassword(password, owner.password_hash)) return false;
 
-  try {
-    const conflicting = resultRows(await d1Query(token,
-      'SELECT id,status,deleted_at FROM admins WHERE email=? AND id<>? LIMIT 1',
-      [email, owner.id]));
-    if (conflicting.length !== 0) return false;
+  const conflicting = resultRows(await d1Query(token,
+    'SELECT id,status,deleted_at FROM admins WHERE email=? AND id<>? LIMIT 1',
+    [email, owner.id]));
+  if (conflicting.length !== 0) return false;
 
-    const now = new Date().toISOString();
-    await d1Query(token,
-      'UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL',
-      [now, owner.id]);
-    await d1Query(token,
-      'UPDATE desktop_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL',
-      [now, owner.id]);
-    await d1Query(token,
-      "UPDATE desktop_devices SET status='revoked',revoked_at=?,last_seen_at=? WHERE admin_id=? AND revoked_at IS NULL",
-      [now, now, owner.id]);
-    await d1Query(token,
-      'DELETE FROM login_attempts WHERE email_hash IN (?,?)',
-      [emailHash(owner.email), emailHash(email)]);
+  const now = new Date().toISOString();
+  await d1Query(token, 'UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL', [now, owner.id]);
+  await d1Query(token, 'UPDATE desktop_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL', [now, owner.id]);
+  await d1Query(token,
+    "UPDATE desktop_devices SET status='revoked',revoked_at=?,last_seen_at=? WHERE admin_id=? AND revoked_at IS NULL",
+    [now, now, owner.id]);
+  await d1Query(token, 'DELETE FROM login_attempts WHERE email_hash IN (?,?)', [emailHash(owner.email), emailHash(email)]);
 
-    const updated = await d1Query(token, `
-UPDATE admins SET
-  name=?, email=?, password_hash=?, role='owner', status='active',
-  failed_login_count=0, locked_until=NULL, last_login_at=NULL,
-  updated_at=?, deleted_at=NULL
-WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL
-`, [name, email, encodedPasswordHash(password), now, owner.id]);
-    const changes = Number(updated?.[0]?.meta?.changes ?? 0);
-    if (changes !== 1) return false;
+  const updated = await d1Query(token, `UPDATE admins SET
+    name=?, email=?, password_hash=?, role='owner', status='active',
+    failed_login_count=0, locked_until=NULL, last_login_at=NULL,
+    updated_at=?, deleted_at=NULL
+  WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL`,
+  [name, email, encodedPasswordHash(password), now, owner.id]);
+  if (Number(updated?.[0]?.meta?.changes ?? 0) !== 1) return false;
 
-    await d1Query(token, `
-INSERT INTO audit_logs
-  (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
-VALUES
-  (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap',?)
-`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email, sessionsRevoked: true, loginThrottleCleared: true }), now]).catch(() => undefined);
-    return true;
-  } catch {
-    return false;
-  }
+  await d1Query(token, `INSERT INTO audit_logs
+    (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
+  VALUES
+    (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap',?)`,
+  [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({
+    previousEmail: owner.email,
+    recoveredEmail: email,
+    sessionsRevoked: true,
+    loginThrottleCleared: true
+  }), now]).catch(() => undefined);
+  return true;
 }
 
 const raw = fs.readFileSync(0, 'utf8');
 let input = null;
 try { input = JSON.parse(raw || '{}'); } catch { input = null; }
-await repairLegacyAdminSchema(input).catch(() => undefined);
+await ensureAuthenticationSchema(input).catch(() => undefined);
 await recoverExistingOwner(input).catch(() => false);
 
 const result = spawnSync(process.execPath, [CORE], {
