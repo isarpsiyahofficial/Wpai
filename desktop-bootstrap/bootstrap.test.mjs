@@ -199,8 +199,25 @@ test('missing D1 permission is reported with the exact permission needed', async
   });
 });
 
-test('an existing owner is never silently overwritten when the supplied password is wrong', async () => {
+test('an existing complete owner is never silently overwritten when the supplied password is wrong', async () => {
+  const fullAdminColumns = [
+    'id', 'name', 'email', 'password_hash', 'role', 'status',
+    'failed_login_count', 'locked_until', 'last_login_at',
+    'created_at', 'updated_at', 'deleted_at'
+  ];
+  const owner = {
+    _rowid: 1,
+    id: 'owner-1',
+    name: 'Gerçek Yönetici',
+    email: 'owner@example.com',
+    password_hash: 'pbkdf2-sha256$310000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+    last_login_at: '2026-08-05T10:00:00.000Z',
+    created_at: '2026-08-01T00:00:00.000Z',
+    updated_at: '2026-08-05T10:00:00.000Z'
+  };
   let insertAttempted = false;
+  let credentialOverwriteAttempted = false;
+
   await withServer((request, response) => {
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/user/tokens/verify') return response.end(cloudflareSuccess({ status: 'active' }));
@@ -211,8 +228,34 @@ test('an existing owner is never silently overwritten when the supplied password
       request.on('data', chunk => { raw += chunk; });
       return request.on('end', () => {
         const body = JSON.parse(raw);
-        if (body.sql.includes('INSERT INTO admins')) insertAttempted = true;
-        response.end(cloudflareSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
+        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
+        if (sql === 'PRAGMA table_info(admins)') {
+          return response.end(cloudflareSuccess([{ success: true, results: fullAdminColumns.map(name => ({ name })), meta: { changes: 0 } }]));
+        }
+        if (sql === 'SELECT rowid AS _rowid,id,created_at,updated_at FROM admins') {
+          return response.end(cloudflareSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('UPDATE admins SET id=?,created_at=?,updated_at=? WHERE rowid=?')) {
+          return response.end(cloudflareSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith('CREATE TABLE IF NOT EXISTS') || sql.startsWith('CREATE INDEX IF NOT EXISTS')) {
+          return response.end(cloudflareSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('PRAGMA table_info(')) {
+          return response.end(cloudflareSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('ALTER TABLE ')) {
+          return response.end(cloudflareSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith('SELECT rowid AS _rowid,id,name,email,password_hash,last_login_at,created_at FROM admins')) {
+          return response.end(cloudflareSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('UPDATE admins SET id=?,name=?,email=?,password_hash=?')) credentialOverwriteAttempted = true;
+        if (sql.includes('INSERT INTO admins')) insertAttempted = true;
+        if (sql.includes("COUNT(*) AS total FROM admins WHERE role='owner'")) {
+          return response.end(cloudflareSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
+        }
+        return response.end(cloudflareSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
       });
     }
     if (request.url === '/api/auth/desktop/login') {
@@ -227,5 +270,6 @@ test('an existing owner is never silently overwritten when the supplied password
     assert.equal(result.body.ok, false);
     assert.match(result.body.error, /daha önce oluşturulmuş bir yönetici hesabı var/);
     assert.equal(insertAttempted, false);
+    assert.equal(credentialOverwriteAttempted, false);
   });
 });
