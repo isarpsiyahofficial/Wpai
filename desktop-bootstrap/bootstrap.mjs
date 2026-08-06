@@ -101,7 +101,12 @@ async function ensureAuthenticationSchema(input) {
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
   )`);
-  await ensureColumns(token, 'admin_sessions', [['revoked_at', 'TEXT']]);
+  await ensureColumns(token, 'admin_sessions', [
+    ['admin_id', 'TEXT'], ['token_hash', 'TEXT'], ['csrf_token', 'TEXT'],
+    ['user_agent_hash', 'TEXT'], ['ip_hash', 'TEXT'], ['expires_at', 'TEXT'],
+    ['revoked_at', 'TEXT'], ['created_at', "TEXT NOT NULL DEFAULT ''"],
+    ['last_seen_at', "TEXT NOT NULL DEFAULT ''"]
+  ]);
 
   await d1Query(token, `CREATE TABLE IF NOT EXISTS login_attempts (
     id TEXT PRIMARY KEY,
@@ -110,6 +115,10 @@ async function ensureAuthenticationSchema(input) {
     success INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   )`);
+  await ensureColumns(token, 'login_attempts', [
+    ['email_hash', 'TEXT'], ['ip_hash', 'TEXT'],
+    ['success', 'INTEGER NOT NULL DEFAULT 0'], ['created_at', "TEXT NOT NULL DEFAULT ''"]
+  ]);
 
   await d1Query(token, `CREATE TABLE IF NOT EXISTS desktop_devices (
     id TEXT PRIMARY KEY,
@@ -125,9 +134,10 @@ async function ensureAuthenticationSchema(input) {
     UNIQUE(admin_id, device_hash)
   )`);
   await ensureColumns(token, 'desktop_devices', [
-    ['app_version', 'TEXT'],
-    ['status', "TEXT NOT NULL DEFAULT 'active'"],
-    ['revoked_at', 'TEXT']
+    ['admin_id', 'TEXT'], ['device_hash', 'TEXT'], ['display_name', 'TEXT'],
+    ['platform', "TEXT NOT NULL DEFAULT 'windows'"], ['app_version', 'TEXT'],
+    ['status', "TEXT NOT NULL DEFAULT 'active'"], ['last_seen_at', "TEXT NOT NULL DEFAULT ''"],
+    ['created_at', "TEXT NOT NULL DEFAULT ''"], ['revoked_at', 'TEXT']
   ]);
 
   await d1Query(token, `CREATE TABLE IF NOT EXISTS desktop_sessions (
@@ -142,9 +152,10 @@ async function ensureAuthenticationSchema(input) {
     created_at TEXT NOT NULL
   )`);
   await ensureColumns(token, 'desktop_sessions', [
-    ['admin_session_id', 'TEXT'],
-    ['last_rotated_at', "TEXT NOT NULL DEFAULT ''"],
-    ['revoked_at', 'TEXT']
+    ['admin_id', 'TEXT'], ['device_id', 'TEXT'], ['admin_session_id', 'TEXT'],
+    ['refresh_token_hash', 'TEXT'], ['expires_at', 'TEXT'],
+    ['last_rotated_at', "TEXT NOT NULL DEFAULT ''"], ['revoked_at', 'TEXT'],
+    ['created_at', "TEXT NOT NULL DEFAULT ''"]
   ]);
 
   await d1Query(token, `CREATE TABLE IF NOT EXISTS audit_logs (
@@ -157,6 +168,12 @@ async function ensureAuthenticationSchema(input) {
     request_id TEXT,
     created_at TEXT NOT NULL
   )`);
+  await ensureColumns(token, 'audit_logs', [
+    ['actor_admin_id', 'TEXT'], ['action', 'TEXT'], ['target_type', 'TEXT'],
+    ['target_id', 'TEXT'], ['summary_json', "TEXT NOT NULL DEFAULT '{}'"],
+    ['request_id', 'TEXT'], ['created_at', "TEXT NOT NULL DEFAULT ''"]
+  ]);
+
   await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id, expires_at)');
   await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_desktop_sessions_admin ON desktop_sessions(admin_id, expires_at) WHERE revoked_at IS NULL');
   await d1Query(token, 'CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(email_hash, ip_hash, created_at)');
@@ -188,31 +205,37 @@ function emailHash(email) {
 }
 
 async function recoverExistingOwner(input) {
-  if (!validSetupInput(input)) return false;
+  if (!validSetupInput(input)) return { recovered: false, reason: 'not-setup' };
   const token = input.apiToken;
   const name = typeof input.adminName === 'string' ? input.adminName.trim() : '';
   const email = typeof input.adminEmail === 'string' ? input.adminEmail.trim().toLowerCase() : '';
   const password = input.adminPassword;
-  if (
-    name.length < 2 || name.length > 120
-    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    || typeof password !== 'string' || password.length < 6 || password.length > 256
-  ) return false;
+  if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || typeof password !== 'string' || password.length < 6) {
+    throw new Error('Yönetici formu geçersiz [admin-recovery-v3].');
+  }
 
-  const owners = resultRows(await d1Query(token,
-    `SELECT id,name,email,password_hash,last_login_at,created_at
-       FROM admins
-      WHERE role='owner' AND status='active' AND deleted_at IS NULL
-      ORDER BY created_at ASC LIMIT 2`));
-  if (owners.length !== 1) return false;
+  const owners = resultRows(await d1Query(token, `
+SELECT id,name,email,password_hash,last_login_at,created_at
+FROM admins
+WHERE role='owner' AND status='active' AND deleted_at IS NULL
+ORDER BY created_at ASC
+LIMIT 2
+`));
+  if (owners.length === 0) return { recovered: false, reason: 'no-owner' };
+  if (owners.length > 1) throw new Error('Birden fazla aktif yönetici bulundu [admin-recovery-v3]. Otomatik değişiklik yapılmadı.');
+
   const owner = owners[0];
-  if (!owner?.id || !owner?.email || !owner?.password_hash) return false;
-  if (String(owner.email).toLowerCase() === email && verifiesEncodedPassword(password, owner.password_hash)) return false;
+  if (!owner?.id || !owner?.email || !owner?.password_hash) {
+    throw new Error('Mevcut yönetici kaydı eksik [admin-recovery-v3].');
+  }
+  if (String(owner.email).toLowerCase() === email && verifiesEncodedPassword(password, owner.password_hash)) {
+    return { recovered: false, reason: 'credentials-valid' };
+  }
 
-  const conflicting = resultRows(await d1Query(token,
-    'SELECT id,status,deleted_at FROM admins WHERE email=? AND id<>? LIMIT 1',
+  const conflict = resultRows(await d1Query(token,
+    'SELECT id FROM admins WHERE email=? AND id<>? AND deleted_at IS NULL LIMIT 1',
     [email, owner.id]));
-  if (conflicting.length !== 0) return false;
+  if (conflict.length) throw new Error('Girilen e-posta başka bir yönetici kaydında kullanılıyor [admin-recovery-v3].');
 
   const now = new Date().toISOString();
   await d1Query(token, 'UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL', [now, owner.id]);
@@ -222,32 +245,38 @@ async function recoverExistingOwner(input) {
     [now, now, owner.id]);
   await d1Query(token, 'DELETE FROM login_attempts WHERE email_hash IN (?,?)', [emailHash(owner.email), emailHash(email)]);
 
-  const updated = await d1Query(token, `UPDATE admins SET
-    name=?, email=?, password_hash=?, role='owner', status='active',
-    failed_login_count=0, locked_until=NULL, last_login_at=NULL,
-    updated_at=?, deleted_at=NULL
-  WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL`,
-  [name, email, encodedPasswordHash(password), now, owner.id]);
-  if (Number(updated?.[0]?.meta?.changes ?? 0) !== 1) return false;
+  const updated = await d1Query(token, `
+UPDATE admins SET
+  name=?,email=?,password_hash=?,role='owner',status='active',
+  failed_login_count=0,locked_until=NULL,last_login_at=NULL,
+  updated_at=?,deleted_at=NULL
+WHERE id=? AND role='owner' AND status='active' AND deleted_at IS NULL
+`, [name, email, encodedPasswordHash(password), now, owner.id]);
+  if (Number(updated[0]?.meta?.changes ?? 0) !== 1) {
+    throw new Error('Yönetici kaydı güncellenemedi [admin-recovery-v3].');
+  }
 
-  await d1Query(token, `INSERT INTO audit_logs
-    (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
-  VALUES
-    (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap',?)`,
-  [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({
-    previousEmail: owner.email,
-    recoveredEmail: email,
-    sessionsRevoked: true,
-    loginThrottleCleared: true
-  }), now]).catch(() => undefined);
-  return true;
+  await d1Query(token, `
+INSERT INTO audit_logs
+  (id,actor_admin_id,action,target_type,target_id,summary_json,request_id,created_at)
+VALUES
+  (?,?, 'admin.cloudflare_owner_recovered','admin',?,?,'desktop-bootstrap-v3',?)
+`, [crypto.randomUUID(), owner.id, owner.id, JSON.stringify({ previousEmail: owner.email, recoveredEmail: email }), now]).catch(() => undefined);
+  return { recovered: true, ownerId: owner.id };
 }
 
 const raw = fs.readFileSync(0, 'utf8');
 let input = null;
 try { input = JSON.parse(raw || '{}'); } catch { input = null; }
-await ensureAuthenticationSchema(input).catch(() => undefined);
-await recoverExistingOwner(input).catch(() => false);
+
+try {
+  await ensureAuthenticationSchema(input);
+  await recoverExistingOwner(input);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stdout.write(`${JSON.stringify({ ok: false, error: `Cloudflare yönetici hazırlığı başarısız [admin-recovery-v3]. ${message}` })}\n`);
+  process.exit(1);
+}
 
 const result = spawnSync(process.execPath, [CORE], {
   input: raw,
@@ -260,7 +289,7 @@ const result = spawnSync(process.execPath, [CORE], {
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) {
-  process.stdout.write(`${JSON.stringify({ ok: false, error: 'Cloudflare bağlantı motoru başlatılamadı.' })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: false, error: 'Cloudflare bağlantı motoru başlatılamadı [bootstrap-v2].' })}\n`);
   process.exitCode = 1;
 } else {
   process.exitCode = result.status ?? 1;
