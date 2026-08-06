@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,12 @@ function cfSuccess(result) {
 
 function apiSuccess(data) {
   return JSON.stringify({ ok: true, data });
+}
+
+function encodedPasswordHash(password) {
+  const salt = Buffer.alloc(16, 7);
+  const hash = crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256');
+  return `pbkdf2-sha256$310000$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
 async function withServer(handler, action) {
@@ -69,16 +76,31 @@ function runBootstrap(baseUrl) {
   });
 }
 
+function commonRoutes(request, response) {
+  response.setHeader('Content-Type', 'application/json');
+  if (request.url === '/user/tokens/verify') {
+    response.end(cfSuccess({ status: 'active', id: 'token-id' }));
+    return true;
+  }
+  if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}`) {
+    response.end(cfSuccess({ uuid: D1_ID, name: 'wa-ai-prod' }));
+    return true;
+  }
+  if (request.url === '/health') {
+    response.end(JSON.stringify({ ok: true, components: { worker: true, d1: true } }));
+    return true;
+  }
+  return false;
+}
+
 test('legacy admins table without deleted_at is repaired before owner lookup', async () => {
   let repaired = false;
   let alterCount = 0;
   let wrapperProbeCount = 0;
 
   await withServer((request, response) => {
+    if (commonRoutes(request, response)) return;
     response.setHeader('Content-Type', 'application/json');
-    if (request.url === '/user/tokens/verify') return response.end(cfSuccess({ status: 'active', id: 'token-id' }));
-    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}`) return response.end(cfSuccess({ uuid: D1_ID, name: 'wa-ai-prod' }));
-    if (request.url === '/health') return response.end(JSON.stringify({ ok: true, components: { worker: true, d1: true } }));
     if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
       let raw = '';
       request.on('data', chunk => { raw += chunk; });
@@ -117,5 +139,140 @@ test('legacy admins table without deleted_at is repaired before owner lookup', a
     assert.equal(alterCount, 1);
     assert.equal(wrapperProbeCount, 2);
     assert.equal(JSON.stringify(result.body).includes('D1 Read izni yoktur'), false);
+  });
+});
+
+test('an unclaimed owner left by a failed setup is recovered and the entered administrator can log in', async () => {
+  let owner = {
+    id: 'ghost-owner',
+    name: 'Yarım Kurulum',
+    email: 'ghost@example.com',
+    password_hash: encodedPasswordHash('old-password'),
+    last_login_at: null,
+    created_at: '2026-08-01T00:00:00.000Z'
+  };
+  let recovered = false;
+  let auditWritten = false;
+
+  await withServer((request, response) => {
+    if (commonRoutes(request, response)) return;
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
+      let raw = '';
+      request.on('data', chunk => { raw += chunk; });
+      return request.on('end', () => {
+        const body = JSON.parse(raw);
+        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
+        if (sql === 'SELECT deleted_at FROM admins LIMIT 0') {
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) {
+          return response.end(cfSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT COUNT(*) AS total FROM admin_sessions')) {
+          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT COUNT(*) AS total FROM desktop_sessions')) {
+          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT COUNT(*) AS total FROM audit_logs')) {
+          assert.deepEqual(body.params, ['ghost-owner', 'ghost-owner']);
+          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT id FROM admins WHERE email=?')) {
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('UPDATE admins SET name=?')) {
+          assert.equal(body.params[0], 'İbrahim');
+          assert.equal(body.params[1], 'isarpsiyah@gmail.com');
+          assert.match(body.params[2], /^pbkdf2-sha256\$310000\$/);
+          assert.equal(body.params[4], 'ghost-owner');
+          owner = { ...owner, name: body.params[0], email: body.params[1], password_hash: body.params[2] };
+          recovered = true;
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith('INSERT INTO audit_logs')) {
+          auditWritten = true;
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) {
+          return response.end(cfSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
+        }
+        return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+      });
+    }
+    if (request.url === '/api/auth/desktop/login') {
+      let raw = '';
+      request.on('data', chunk => { raw += chunk; });
+      return request.on('end', () => {
+        const body = JSON.parse(raw);
+        assert.equal(recovered, true);
+        assert.equal(body.email, 'isarpsiyah@gmail.com');
+        assert.equal(body.password, '123456');
+        response.end(apiSuccess({
+          admin: { id: 'ghost-owner', name: 'İbrahim', email: 'isarpsiyah@gmail.com', role: 'owner' },
+          accessToken: 'a'.repeat(64),
+          refreshToken: 'r'.repeat(64)
+        }));
+      });
+    }
+    if (request.url === '/api/auth/desktop/logout') return response.end(apiSuccess({ loggedOut: true }));
+    response.statusCode = 404;
+    response.end('{}');
+  }, async baseUrl => {
+    const result = await runBootstrap(baseUrl);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.body.ok, true);
+    assert.equal(result.body.admin.email, 'isarpsiyah@gmail.com');
+    assert.equal(recovered, true);
+    assert.equal(auditWritten, true);
+  });
+});
+
+test('a claimed administrator is never overwritten by the recovery guard', async () => {
+  let updateAttempted = false;
+  const owner = {
+    id: 'real-owner',
+    name: 'Gerçek Yönetici',
+    email: 'owner@example.com',
+    password_hash: encodedPasswordHash('real-password'),
+    last_login_at: '2026-08-05T10:00:00.000Z',
+    created_at: '2026-08-01T00:00:00.000Z'
+  };
+
+  await withServer((request, response) => {
+    if (commonRoutes(request, response)) return;
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
+      let raw = '';
+      request.on('data', chunk => { raw += chunk; });
+      return request.on('end', () => {
+        const body = JSON.parse(raw);
+        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
+        if (sql === 'SELECT deleted_at FROM admins LIMIT 0') {
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) {
+          return response.end(cfSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('UPDATE admins SET name=?')) updateAttempted = true;
+        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) {
+          return response.end(cfSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
+        }
+        return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+      });
+    }
+    if (request.url === '/api/auth/desktop/login') {
+      response.statusCode = 401;
+      return response.end(JSON.stringify({ ok: false, error: { code: 'LOGIN_FAILED', message: 'E-posta veya parola hatalı.' } }));
+    }
+    response.statusCode = 404;
+    response.end('{}');
+  }, async baseUrl => {
+    const result = await runBootstrap(baseUrl);
+    assert.equal(result.code, 1);
+    assert.equal(result.body.ok, false);
+    assert.match(result.body.error, /daha önce oluşturulmuş bir yönetici hesabı var/);
+    assert.equal(updateAttempted, false);
   });
 });
