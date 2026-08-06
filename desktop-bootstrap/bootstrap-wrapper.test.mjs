@@ -20,6 +20,10 @@ function apiSuccess(data) {
   return JSON.stringify({ ok: true, data });
 }
 
+function d1Success(results = [], changes = 0) {
+  return cfSuccess([{ success: true, results, meta: { changes } }]);
+}
+
 function encodedPasswordHash(password) {
   const salt = Buffer.alloc(16, 7);
   const hash = crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256');
@@ -41,7 +45,7 @@ async function withServer(handler, action) {
   }
 }
 
-function runBootstrap(baseUrl) {
+function runBootstrap(baseUrl, input = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SCRIPT], {
       cwd: path.dirname(HERE),
@@ -71,12 +75,13 @@ function runBootstrap(baseUrl) {
       apiToken: TOKEN,
       adminName: 'İbrahim',
       adminEmail: 'isarpsiyah@gmail.com',
-      adminPassword: '123456'
+      adminPassword: '123456',
+      ...input
     }));
   });
 }
 
-function commonRoutes(request, response) {
+function commonRoute(request, response) {
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/user/tokens/verify') {
     response.end(cfSuccess({ status: 'active', id: 'token-id' }));
@@ -93,34 +98,44 @@ function commonRoutes(request, response) {
   return false;
 }
 
-test('legacy admins table without deleted_at is repaired before owner lookup', async () => {
-  let repaired = false;
-  let alterCount = 0;
-  let wrapperProbeCount = 0;
+function readJsonRequest(request, callback) {
+  let raw = '';
+  request.on('data', chunk => { raw += chunk; });
+  request.on('end', () => callback(JSON.parse(raw || '{}')));
+}
+
+test('legacy authentication schema is repaired before the first administrator login', async () => {
+  const adminColumns = new Set(['id', 'name', 'email', 'password_hash', 'created_at']);
+  const addedColumns = [];
+  const createdTables = new Set();
 
   await withServer((request, response) => {
-    if (commonRoutes(request, response)) return;
+    if (commonRoute(request, response)) return;
     response.setHeader('Content-Type', 'application/json');
     if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
-      let raw = '';
-      request.on('data', chunk => { raw += chunk; });
-      return request.on('end', () => {
-        const body = JSON.parse(raw);
-        if (body.sql === 'SELECT deleted_at FROM admins LIMIT 0') {
-          wrapperProbeCount += 1;
-          if (!repaired) {
-            response.statusCode = 400;
-            return response.end(JSON.stringify({ success: false, errors: [{ code: 7500, message: 'no such column: deleted_at at offset 7: SQLITE_ERROR' }] }));
-          }
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+      return readJsonRequest(request, body => {
+        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
+        if (sql === 'PRAGMA table_info(admins)') {
+          return response.end(d1Success([...adminColumns].map(name => ({ name }))));
         }
-        if (body.sql === 'ALTER TABLE admins ADD COLUMN deleted_at TEXT') {
-          repaired = true;
-          alterCount += 1;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        const alter = sql.match(/^ALTER TABLE admins ADD COLUMN (\w+) /);
+        if (alter) {
+          adminColumns.add(alter[1]);
+          addedColumns.push(alter[1]);
+          return response.end(d1Success([], 1));
         }
-        const results = body.sql.includes('COUNT(*)') ? [{ total: 0 }] : [];
-        return response.end(cfSuccess([{ success: true, results, meta: { changes: body.sql.includes('INSERT INTO admins') ? 1 : 0 } }]));
+        const create = sql.match(/^CREATE TABLE IF NOT EXISTS (\w+)/);
+        if (create) {
+          createdTables.add(create[1]);
+          return response.end(d1Success());
+        }
+        if (sql.startsWith('PRAGMA table_info(')) return response.end(d1Success([]));
+        if (sql.startsWith('ALTER TABLE ')) return response.end(d1Success([], 1));
+        if (sql.startsWith('CREATE INDEX IF NOT EXISTS')) return response.end(d1Success());
+        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) return response.end(d1Success([]));
+        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) return response.end(d1Success([{ total: 0 }]));
+        if (sql.startsWith('INSERT INTO admins')) return response.end(d1Success([], 1));
+        return response.end(d1Success());
       });
     }
     if (request.url === '/api/auth/desktop/login') return response.end(apiSuccess({
@@ -135,14 +150,18 @@ test('legacy admins table without deleted_at is repaired before owner lookup', a
     const result = await runBootstrap(baseUrl);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.body.ok, true);
-    assert.equal(repaired, true);
-    assert.equal(alterCount, 1);
-    assert.equal(wrapperProbeCount, 2);
-    assert.equal(JSON.stringify(result.body).includes('D1 Read izni yoktur'), false);
   });
+
+  assert.equal(adminColumns.has('deleted_at'), true);
+  assert.equal(adminColumns.has('failed_login_count'), true);
+  assert.equal(addedColumns.includes('deleted_at'), true);
+  assert.equal(createdTables.has('desktop_devices'), true);
+  assert.equal(createdTables.has('desktop_sessions'), true);
+  assert.equal(createdTables.has('login_attempts'), true);
 });
 
-async function runOwnerRecoveryScenario({ lastLoginAt }) {
+async function runSingleOwnerRecovery(lastLoginAt) {
+  const fullAdminColumns = ['id', 'name', 'email', 'password_hash', 'role', 'status', 'failed_login_count', 'locked_until', 'last_login_at', 'created_at', 'updated_at', 'deleted_at'];
   let owner = {
     id: 'existing-owner',
     name: 'Önceki Yönetici',
@@ -151,70 +170,43 @@ async function runOwnerRecoveryScenario({ lastLoginAt }) {
     last_login_at: lastLoginAt,
     created_at: '2026-08-01T00:00:00.000Z'
   };
-  const revoked = { admin: false, desktop: false, device: false };
-  let recovered = false;
-  let auditWritten = false;
+  const evidence = { adminRevoked: false, desktopRevoked: false, deviceRevoked: false, throttleCleared: false, updated: false, audit: false };
 
   await withServer((request, response) => {
-    if (commonRoutes(request, response)) return;
+    if (commonRoute(request, response)) return;
     response.setHeader('Content-Type', 'application/json');
     if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
-      let raw = '';
-      request.on('data', chunk => { raw += chunk; });
-      return request.on('end', () => {
-        const body = JSON.parse(raw);
+      return readJsonRequest(request, body => {
         const sql = String(body.sql).replace(/\s+/g, ' ').trim();
-        if (sql === 'SELECT deleted_at FROM admins LIMIT 0') {
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) {
-          return response.end(cfSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT id,status,deleted_at FROM admins WHERE email=?')) {
-          assert.deepEqual(body.params, ['isarpsiyah@gmail.com', 'existing-owner']);
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('UPDATE admin_sessions SET revoked_at=?')) {
-          revoked.admin = true;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
-        }
-        if (sql.startsWith('UPDATE desktop_sessions SET revoked_at=?')) {
-          revoked.desktop = true;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
-        }
-        if (sql.startsWith("UPDATE desktop_devices SET status='revoked'")) {
-          revoked.device = true;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
-        }
+        if (sql === 'PRAGMA table_info(admins)') return response.end(d1Success(fullAdminColumns.map(name => ({ name }))));
+        if (sql.startsWith('PRAGMA table_info(')) return response.end(d1Success([]));
+        if (sql.startsWith('CREATE TABLE IF NOT EXISTS') || sql.startsWith('CREATE INDEX IF NOT EXISTS') || sql.startsWith('ALTER TABLE ')) return response.end(d1Success());
+        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) return response.end(d1Success([owner]));
+        if (sql.startsWith('SELECT id,status,deleted_at FROM admins WHERE email=?')) return response.end(d1Success([]));
+        if (sql.startsWith('UPDATE admin_sessions SET revoked_at=?')) { evidence.adminRevoked = true; return response.end(d1Success([], 1)); }
+        if (sql.startsWith('UPDATE desktop_sessions SET revoked_at=?')) { evidence.desktopRevoked = true; return response.end(d1Success([], 1)); }
+        if (sql.startsWith("UPDATE desktop_devices SET status='revoked'")) { evidence.deviceRevoked = true; return response.end(d1Success([], 1)); }
+        if (sql.startsWith('DELETE FROM login_attempts WHERE email_hash IN')) { evidence.throttleCleared = true; return response.end(d1Success([], 2)); }
         if (sql.startsWith('UPDATE admins SET name=?')) {
           assert.equal(body.params[0], 'İbrahim');
           assert.equal(body.params[1], 'isarpsiyah@gmail.com');
           assert.match(body.params[2], /^pbkdf2-sha256\$310000\$/);
-          assert.equal(body.params[4], 'existing-owner');
           owner = { ...owner, name: body.params[0], email: body.params[1], password_hash: body.params[2], last_login_at: null };
-          recovered = true;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+          evidence.updated = true;
+          return response.end(d1Success([], 1));
         }
-        if (sql.startsWith('INSERT INTO audit_logs')) {
-          auditWritten = true;
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
-        }
-        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) {
-          return response.end(cfSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
-        }
-        return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        if (sql.startsWith('INSERT INTO audit_logs')) { evidence.audit = true; return response.end(d1Success([], 1)); }
+        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) return response.end(d1Success([{ total: 1 }]));
+        return response.end(d1Success());
       });
     }
     if (request.url === '/api/auth/desktop/login') {
-      let raw = '';
-      request.on('data', chunk => { raw += chunk; });
-      return request.on('end', () => {
-        const body = JSON.parse(raw);
-        assert.equal(recovered, true);
+      return readJsonRequest(request, body => {
+        assert.equal(evidence.updated, true);
         assert.equal(body.email, 'isarpsiyah@gmail.com');
         assert.equal(body.password, '123456');
         response.end(apiSuccess({
-          admin: { id: 'existing-owner', name: 'İbrahim', email: 'isarpsiyah@gmail.com', role: 'owner' },
+          admin: { id: owner.id, name: owner.name, email: owner.email, role: 'owner' },
           accessToken: 'a'.repeat(64),
           refreshToken: 'r'.repeat(64)
         }));
@@ -230,15 +222,51 @@ async function runOwnerRecoveryScenario({ lastLoginAt }) {
     assert.equal(result.body.admin.email, 'isarpsiyah@gmail.com');
   });
 
-  assert.deepEqual(revoked, { admin: true, desktop: true, device: true });
-  assert.equal(recovered, true);
-  assert.equal(auditWritten, true);
+  assert.deepEqual(evidence, { adminRevoked: true, desktopRevoked: true, deviceRevoked: true, throttleCleared: true, updated: true, audit: true });
 }
 
-test('an owner left by a failed setup is recovered and the entered administrator can log in', async () => {
-  await runOwnerRecoveryScenario({ lastLoginAt: null });
+test('a stale single owner is recovered with the entered administrator details', async () => {
+  await runSingleOwnerRecovery(null);
 });
 
-test('a previously claimed single owner can be explicitly recovered with the validated Cloudflare token', async () => {
-  await runOwnerRecoveryScenario({ lastLoginAt: '2026-08-05T10:00:00.000Z' });
+test('a previously used single owner is recovered and every old session is revoked', async () => {
+  await runSingleOwnerRecovery('2026-08-05T10:00:00.000Z');
+});
+
+test('multiple active owners are never overwritten automatically', async () => {
+  const fullAdminColumns = ['id', 'name', 'email', 'password_hash', 'role', 'status', 'failed_login_count', 'locked_until', 'last_login_at', 'created_at', 'updated_at', 'deleted_at'];
+  let updated = false;
+  const owners = [
+    { id: 'owner-1', name: 'Bir', email: 'one@example.com', password_hash: encodedPasswordHash('one-pass'), last_login_at: null, created_at: '2026-08-01' },
+    { id: 'owner-2', name: 'İki', email: 'two@example.com', password_hash: encodedPasswordHash('two-pass'), last_login_at: null, created_at: '2026-08-02' }
+  ];
+
+  await withServer((request, response) => {
+    if (commonRoute(request, response)) return;
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
+      return readJsonRequest(request, body => {
+        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
+        if (sql === 'PRAGMA table_info(admins)') return response.end(d1Success(fullAdminColumns.map(name => ({ name }))));
+        if (sql.startsWith('PRAGMA table_info(')) return response.end(d1Success([]));
+        if (sql.startsWith('CREATE TABLE IF NOT EXISTS') || sql.startsWith('CREATE INDEX IF NOT EXISTS') || sql.startsWith('ALTER TABLE ')) return response.end(d1Success());
+        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) return response.end(d1Success(owners));
+        if (sql.startsWith('UPDATE admins SET name=?')) updated = true;
+        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) return response.end(d1Success([{ total: 2 }]));
+        return response.end(d1Success());
+      });
+    }
+    if (request.url === '/api/auth/desktop/login') {
+      response.statusCode = 401;
+      return response.end(JSON.stringify({ ok: false, error: { code: 'LOGIN_FAILED', message: 'E-posta veya parola hatalı.' } }));
+    }
+    response.statusCode = 404;
+    response.end('{}');
+  }, async baseUrl => {
+    const result = await runBootstrap(baseUrl);
+    assert.equal(result.code, 1);
+    assert.equal(result.body.ok, false);
+    assert.match(result.body.error, /yönetici/i);
+    assert.equal(updated, false);
+  });
 });
