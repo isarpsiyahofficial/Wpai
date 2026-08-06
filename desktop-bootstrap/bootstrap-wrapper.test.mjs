@@ -142,15 +142,16 @@ test('legacy admins table without deleted_at is repaired before owner lookup', a
   });
 });
 
-test('an unclaimed owner left by a failed setup is recovered and the entered administrator can log in', async () => {
+async function runOwnerRecoveryScenario({ lastLoginAt }) {
   let owner = {
-    id: 'ghost-owner',
-    name: 'Yarım Kurulum',
-    email: 'ghost@example.com',
+    id: 'existing-owner',
+    name: 'Önceki Yönetici',
+    email: 'old-owner@example.com',
     password_hash: encodedPasswordHash('old-password'),
-    last_login_at: null,
+    last_login_at: lastLoginAt,
     created_at: '2026-08-01T00:00:00.000Z'
   };
+  const revoked = { admin: false, desktop: false, device: false };
   let recovered = false;
   let auditWritten = false;
 
@@ -169,25 +170,28 @@ test('an unclaimed owner left by a failed setup is recovered and the entered adm
         if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) {
           return response.end(cfSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
         }
-        if (sql.startsWith('SELECT COUNT(*) AS total FROM admin_sessions')) {
-          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT COUNT(*) AS total FROM desktop_sessions')) {
-          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT COUNT(*) AS total FROM audit_logs')) {
-          assert.deepEqual(body.params, ['ghost-owner', 'ghost-owner']);
-          return response.end(cfSuccess([{ success: true, results: [{ total: 0 }], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT id FROM admins WHERE email=?')) {
+        if (sql.startsWith('SELECT id,status,deleted_at FROM admins WHERE email=?')) {
+          assert.deepEqual(body.params, ['isarpsiyah@gmail.com', 'existing-owner']);
           return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
+        }
+        if (sql.startsWith('UPDATE admin_sessions SET revoked_at=?')) {
+          revoked.admin = true;
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith('UPDATE desktop_sessions SET revoked_at=?')) {
+          revoked.desktop = true;
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
+        }
+        if (sql.startsWith("UPDATE desktop_devices SET status='revoked'")) {
+          revoked.device = true;
+          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
         }
         if (sql.startsWith('UPDATE admins SET name=?')) {
           assert.equal(body.params[0], 'İbrahim');
           assert.equal(body.params[1], 'isarpsiyah@gmail.com');
           assert.match(body.params[2], /^pbkdf2-sha256\$310000\$/);
-          assert.equal(body.params[4], 'ghost-owner');
-          owner = { ...owner, name: body.params[0], email: body.params[1], password_hash: body.params[2] };
+          assert.equal(body.params[4], 'existing-owner');
+          owner = { ...owner, name: body.params[0], email: body.params[1], password_hash: body.params[2], last_login_at: null };
           recovered = true;
           return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 1 } }]));
         }
@@ -210,7 +214,7 @@ test('an unclaimed owner left by a failed setup is recovered and the entered adm
         assert.equal(body.email, 'isarpsiyah@gmail.com');
         assert.equal(body.password, '123456');
         response.end(apiSuccess({
-          admin: { id: 'ghost-owner', name: 'İbrahim', email: 'isarpsiyah@gmail.com', role: 'owner' },
+          admin: { id: 'existing-owner', name: 'İbrahim', email: 'isarpsiyah@gmail.com', role: 'owner' },
           accessToken: 'a'.repeat(64),
           refreshToken: 'r'.repeat(64)
         }));
@@ -224,55 +228,17 @@ test('an unclaimed owner left by a failed setup is recovered and the entered adm
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.body.ok, true);
     assert.equal(result.body.admin.email, 'isarpsiyah@gmail.com');
-    assert.equal(recovered, true);
-    assert.equal(auditWritten, true);
   });
+
+  assert.deepEqual(revoked, { admin: true, desktop: true, device: true });
+  assert.equal(recovered, true);
+  assert.equal(auditWritten, true);
+}
+
+test('an owner left by a failed setup is recovered and the entered administrator can log in', async () => {
+  await runOwnerRecoveryScenario({ lastLoginAt: null });
 });
 
-test('a claimed administrator is never overwritten by the recovery guard', async () => {
-  let updateAttempted = false;
-  const owner = {
-    id: 'real-owner',
-    name: 'Gerçek Yönetici',
-    email: 'owner@example.com',
-    password_hash: encodedPasswordHash('real-password'),
-    last_login_at: '2026-08-05T10:00:00.000Z',
-    created_at: '2026-08-01T00:00:00.000Z'
-  };
-
-  await withServer((request, response) => {
-    if (commonRoutes(request, response)) return;
-    response.setHeader('Content-Type', 'application/json');
-    if (request.url === `/accounts/${ACCOUNT_ID}/d1/database/${D1_ID}/query`) {
-      let raw = '';
-      request.on('data', chunk => { raw += chunk; });
-      return request.on('end', () => {
-        const body = JSON.parse(raw);
-        const sql = String(body.sql).replace(/\s+/g, ' ').trim();
-        if (sql === 'SELECT deleted_at FROM admins LIMIT 0') {
-          return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('SELECT id,name,email,password_hash,last_login_at,created_at FROM admins')) {
-          return response.end(cfSuccess([{ success: true, results: [owner], meta: { changes: 0 } }]));
-        }
-        if (sql.startsWith('UPDATE admins SET name=?')) updateAttempted = true;
-        if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) {
-          return response.end(cfSuccess([{ success: true, results: [{ total: 1 }], meta: { changes: 0 } }]));
-        }
-        return response.end(cfSuccess([{ success: true, results: [], meta: { changes: 0 } }]));
-      });
-    }
-    if (request.url === '/api/auth/desktop/login') {
-      response.statusCode = 401;
-      return response.end(JSON.stringify({ ok: false, error: { code: 'LOGIN_FAILED', message: 'E-posta veya parola hatalı.' } }));
-    }
-    response.statusCode = 404;
-    response.end('{}');
-  }, async baseUrl => {
-    const result = await runBootstrap(baseUrl);
-    assert.equal(result.code, 1);
-    assert.equal(result.body.ok, false);
-    assert.match(result.body.error, /daha önce oluşturulmuş bir yönetici hesabı var/);
-    assert.equal(updateAttempted, false);
-  });
+test('a previously claimed single owner can be explicitly recovered with the validated Cloudflare token', async () => {
+  await runOwnerRecoveryScenario({ lastLoginAt: '2026-08-05T10:00:00.000Z' });
 });
