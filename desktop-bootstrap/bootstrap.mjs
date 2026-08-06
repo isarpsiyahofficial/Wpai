@@ -295,6 +295,13 @@ LIMIT 2
     return { recovered: false, reason: 'credentials-valid' };
   }
 
+  const repairedCriticalColumn = (schemaResult?.adminColumnsAdded ?? []).some(column =>
+    ['id', 'name', 'email', 'password_hash', 'role', 'status', 'created_at'].includes(column));
+  const incompleteOwner = !owner?.id || !owner?.name || !owner?.email || !owner?.password_hash;
+  if (!repairedCriticalColumn && !incompleteOwner) {
+    return { recovered: false, reason: 'existing-owner' };
+  }
+
   const conflict = resultRows(await d1Query(token,
     'SELECT rowid AS _rowid FROM admins WHERE email=? AND rowid<>? AND deleted_at IS NULL LIMIT 1',
     [email, owner._rowid]));
@@ -351,9 +358,12 @@ try {
   await recoverExistingOwner(input, schemaResult);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
+  const permissionFailure = /10000|authentication|unauthorized|forbidden|permission/i.test(message);
   const detail = message.includes(`[${RECOVERY_VERSION}]`)
     ? message
-    : `Cloudflare tokeni doğrulandı ancak WPAI veritabanı hazırlanamadı [${RECOVERY_VERSION}]. Bu bir API izni uyarısı değildir; production D1 şeması onarılamadı. ${message}`;
+    : permissionFailure
+      ? `Cloudflare tokeni doğrulandı ancak production D1 sorgusu yetkilendirilemedi. Token izinlerinde D1 Read ve D1 Write bulunmalıdır. ${message}`
+      : `Cloudflare tokeni doğrulandı ancak WPAI veritabanı hazırlanamadı [${RECOVERY_VERSION}]. Bu bir API izni uyarısı değildir; production D1 şeması onarılamadı. ${message}`;
   process.stdout.write(`${JSON.stringify({ ok: false, error: detail })}\n`);
   process.exit(1);
 }
