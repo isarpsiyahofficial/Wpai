@@ -86,7 +86,7 @@ fn bootstrap_root(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|_| "WPAI paket kaynakları bulunamadı.".to_string())?;
     let root = node_compatible_path(&resource_dir.join("cloudflare-bootstrap"));
-    if !root.join("bootstrap.mjs").is_file() || !root.join("runtime").join("node.exe").is_file() {
+    if !root.join("bootstrap-v5.mjs").is_file() || !root.join("bootstrap.mjs").is_file() || !root.join("runtime").join("node.exe").is_file() {
         return Err("Cloudflare kurulum motoru Windows paketinde eksik.".into());
     }
     Ok(root)
@@ -221,7 +221,7 @@ fn run_engine(
     payload["apiToken"] = Value::String(token.to_string());
     execute_engine(
         &root.join("runtime").join("node.exe"),
-        &root.join("bootstrap.mjs"),
+        &root.join("bootstrap-v5.mjs"),
         &root,
         &project,
         payload,
@@ -347,8 +347,8 @@ mod tests {
     fn packaged_node_entrypoint_resolves_from_verbatim_paths() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let repository_root = manifest_dir.parent().expect("repository root");
-        let script = repository_root.join("desktop-bootstrap").join("bootstrap.mjs");
-        assert!(script.is_file(), "bootstrap.mjs must exist for the Windows runtime test");
+        let script = repository_root.join("desktop-bootstrap").join("bootstrap-v5.mjs");
+        assert!(script.is_file(), "bootstrap-v5.mjs must exist for the Windows runtime test");
 
         let where_output = Command::new("where.exe")
             .arg("node.exe")
