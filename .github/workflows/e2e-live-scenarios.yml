@@ -41,8 +41,8 @@ jobs:
         run: npm install --no-save --package-lock=false --no-audit --no-fund @playwright/test@1.55.0
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Build production web assets
-        run: npm run build
+      - name: Build isolated E2E browser layout assets
+        run: VITE_WPAI_E2E=1 npm run build
       - name: Start preview, verify port and run populated browser scenarios
         shell: bash
         run: |
