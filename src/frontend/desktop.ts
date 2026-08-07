@@ -19,6 +19,15 @@ export type FaissMatch = {
   metadata: Record<string, unknown>;
 };
 
+export type CloudflareBootstrapResult = {
+  ok?: boolean;
+  mode?: string;
+  version?: string;
+  admin?: { id: string; name: string; email: string; role: string };
+  session?: { refreshToken: string; refreshExpiresAt: string; deviceId: string };
+  report?: Record<string, unknown>;
+};
+
 function available(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -93,8 +102,14 @@ export const desktop = {
   cloudflareRepair(accountId: string, actions: string[], apiToken?: string): Promise<Record<string, unknown>> {
     return requiredInvoke('cloudflare_repair', { accountId, actions, apiToken: apiToken || null });
   },
-  cloudflareSetup(input: { accountId: string; apiToken: string; adminName: string; adminEmail: string; adminPassword: string }): Promise<Record<string, unknown>> {
-    return requiredInvoke('cloudflare_setup', input);
+  cloudflareSetup(input: { accountId: string; apiToken: string; deviceId: string }): Promise<CloudflareBootstrapResult> {
+    return requiredInvoke('cloudflare_setup', {
+      accountId: input.accountId,
+      apiToken: input.apiToken,
+      adminName: input.deviceId,
+      adminEmail: 'device-session@wpai.local',
+      adminPassword: 'device-bootstrap-v6'
+    });
   },
   cloudflareForget(): Promise<{ forgotten: boolean; accountId: string }> {
     return requiredInvoke('cloudflare_forget');
