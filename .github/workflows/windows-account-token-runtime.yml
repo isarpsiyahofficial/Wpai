@@ -53,9 +53,9 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --name faiss-service sidecar/faiss_service.py
           New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
           Copy-Item dist/faiss-service.exe src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe
-      - name: Run token routing unit tests
+      - name: Run token routing and owner-reclaim unit tests
         shell: pwsh
-        run: node --test desktop-bootstrap/bootstrap.test.mjs
+        run: node --test desktop-bootstrap/bootstrap.test.mjs desktop-bootstrap/bootstrap-v5.test.mjs
       - name: Prepare packaged Cloudflare runtime
         shell: pwsh
         run: |
@@ -85,7 +85,7 @@ jobs:
           if (-not $installer) { throw 'NSIS setup.exe was not produced' }
           $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
           if ($install.ExitCode -ne 0) { throw "NSIS silent install failed: $($install.ExitCode)" }
-      - name: Run account token through installed packaged engine
+      - name: Run account token through installed packaged Recovery V5 engine
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -102,10 +102,10 @@ jobs:
           $installLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
           if (-not (Test-Path $installLocation)) { throw "WPAI install location is missing: $installLocation" }
 
-          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'bootstrap.mjs' -File -Recurse | Select-Object -First 1
+          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'bootstrap-v5.mjs' -File -Recurse | Select-Object -First 1
           $bootstrapNode = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
-          if (-not $bootstrapScript -or -not $bootstrapNode) { throw 'Installed Cloudflare engine resources are incomplete' }
+          if (-not $bootstrapScript -or -not $bootstrapNode) { throw 'Installed Cloudflare Recovery V5 engine resources are incomplete' }
 
           node desktop-bootstrap/installed-account-token-smoke.mjs `
             $bootstrapNode.FullName `
