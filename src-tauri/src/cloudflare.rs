@@ -26,6 +26,13 @@ fn validate_api_token(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_device_id(value: &str) -> Result<(), String> {
+    if !(20..=500).contains(&value.len()) || value.chars().any(char::is_whitespace) {
+        return Err("WPAI cihaz kimliği geçersiz.".into());
+    }
+    Ok(())
+}
+
 fn credential_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|_| "Windows Credential Manager açılamadı.".to_string())
@@ -86,8 +93,11 @@ fn bootstrap_root(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|_| "WPAI paket kaynakları bulunamadı.".to_string())?;
     let root = node_compatible_path(&resource_dir.join("cloudflare-bootstrap"));
-    if !root.join("bootstrap-v5.mjs").is_file() || !root.join("bootstrap.mjs").is_file() || !root.join("runtime").join("node.exe").is_file() {
-        return Err("Cloudflare kurulum motoru Windows paketinde eksik.".into());
+    if !root.join("bootstrap-v6.mjs").is_file()
+        || !root.join("bootstrap.mjs").is_file()
+        || !root.join("runtime").join("node.exe").is_file()
+    {
+        return Err("Cloudflare Device Bootstrap V6 Windows paketinde eksik.".into());
     }
     Ok(root)
 }
@@ -141,7 +151,6 @@ fn execute_engine(
     project_path: &Path,
     payload: Value,
     token: &str,
-    password: Option<&str>,
 ) -> Result<Value, String> {
     let node_path = node_compatible_path(node_path);
     let script_path = node_compatible_path(script_path);
@@ -166,7 +175,7 @@ fn execute_engine(
     let mut child = command.spawn().map_err(|error| {
         format!(
             "Cloudflare kurulum motoru başlatılamadı: {}",
-            sanitize(error.to_string(), &[token, password.unwrap_or("")])
+            sanitize(error.to_string(), &[token])
         )
     })?;
     child
@@ -187,7 +196,7 @@ fn execute_engine(
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             ),
-            &[token, password.unwrap_or("")],
+            &[token],
         );
         format!("Cloudflare kurulum cevabı okunamadı. {detail}")
     })?;
@@ -196,7 +205,7 @@ fn execute_engine(
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("Cloudflare kurulumu tamamlanamadı.");
-        return Err(sanitize(message.to_string(), &[token, password.unwrap_or("")]));
+        return Err(sanitize(message.to_string(), &[token]));
     }
     Ok(parsed)
 }
@@ -205,7 +214,6 @@ fn run_engine(
     app: &AppHandle,
     mut payload: Value,
     token: &str,
-    password: Option<&str>,
     needs_project: bool,
 ) -> Result<Value, String> {
     let root = bootstrap_root(app)?;
@@ -221,12 +229,11 @@ fn run_engine(
     payload["apiToken"] = Value::String(token.to_string());
     execute_engine(
         &root.join("runtime").join("node.exe"),
-        &root.join("bootstrap-v5.mjs"),
+        &root.join("bootstrap-v6.mjs"),
         &root,
         &project,
         payload,
         token,
-        password,
     )
 }
 
@@ -243,7 +250,7 @@ pub fn cloudflare_connection_status() -> Result<Value, String> {
 pub fn cloudflare_scan(app: AppHandle, account_id: String, api_token: Option<String>) -> Result<Value, String> {
     validate_account_id(&account_id)?;
     let (token, supplied) = resolve_token(api_token)?;
-    let result = run_engine(&app, json!({ "action": "scan", "accountId": account_id }), &token, None, false)?;
+    let result = run_engine(&app, json!({ "action": "scan", "accountId": account_id }), &token, false)?;
     if supplied {
         save_api_token(&token)?;
     }
@@ -266,7 +273,6 @@ pub fn cloudflare_repair(
         &app,
         json!({ "action": "repair", "accountId": account_id, "actions": actions }),
         &token,
-        None,
         false,
     )?;
     if supplied {
@@ -280,24 +286,24 @@ pub fn cloudflare_setup(
     app: AppHandle,
     account_id: String,
     api_token: String,
-    admin_name: String,
-    admin_email: String,
-    admin_password: String,
+    device_id: String,
 ) -> Result<Value, String> {
     validate_account_id(&account_id)?;
     validate_api_token(api_token.trim())?;
+    validate_device_id(device_id.trim())?;
     let token = api_token.trim().to_string();
+    let device_id = device_id.trim().to_string();
     let result = run_engine(
         &app,
         json!({
             "action": "setup",
             "accountId": account_id,
-            "adminName": admin_name,
-            "adminEmail": admin_email,
-            "adminPassword": admin_password
+            "deviceId": device_id,
+            "deviceName": "WPAI Windows",
+            "platform": "windows",
+            "appVersion": env!("CARGO_PKG_VERSION")
         }),
         &token,
-        Some(&admin_password),
         true,
     )?;
     save_api_token(&token)?;
@@ -312,7 +318,7 @@ pub fn cloudflare_forget() -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_engine, node_compatible_path, validate_account_id, validate_api_token, ACCOUNT_ID};
+    use super::{execute_engine, node_compatible_path, validate_account_id, validate_api_token, validate_device_id, ACCOUNT_ID};
     use serde_json::json;
     use std::{path::PathBuf, process::Command};
 
@@ -327,6 +333,13 @@ mod tests {
         assert!(validate_api_token(&"a".repeat(40)).is_ok());
         assert!(validate_api_token("short").is_err());
         assert!(validate_api_token(&format!("{} ", "a".repeat(40))).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_device_ids() {
+        assert!(validate_device_id(&format!("device-{}", "a".repeat(40))).is_ok());
+        assert!(validate_device_id("short").is_err());
+        assert!(validate_device_id(&format!("{} ", "a".repeat(40))).is_err());
     }
 
     #[cfg(target_os = "windows")]
@@ -347,8 +360,8 @@ mod tests {
     fn packaged_node_entrypoint_resolves_from_verbatim_paths() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let repository_root = manifest_dir.parent().expect("repository root");
-        let script = repository_root.join("desktop-bootstrap").join("bootstrap-v5.mjs");
-        assert!(script.is_file(), "bootstrap-v5.mjs must exist for the Windows runtime test");
+        let script = repository_root.join("desktop-bootstrap").join("bootstrap-v6.mjs");
+        assert!(script.is_file(), "bootstrap-v6.mjs must exist for the Windows runtime test");
 
         let where_output = Command::new("where.exe")
             .arg("node.exe")
@@ -375,7 +388,6 @@ mod tests {
                 "apiToken": "a".repeat(48)
             }),
             &"a".repeat(48),
-            None,
         )
         .expect_err("invalid action must be returned as a parsed engine error");
         assert!(error.contains("Geçersiz Cloudflare bağlantı işlemi"), "unexpected error: {error}");
