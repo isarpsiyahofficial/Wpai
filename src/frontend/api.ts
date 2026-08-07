@@ -79,6 +79,14 @@ export async function desktopLogin(email: string, password: string): Promise<Des
   return session;
 }
 
+export async function activateDesktopBootstrapSession(refreshToken: string): Promise<DesktopSession> {
+  if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
+  if (typeof refreshToken !== 'string' || refreshToken.length < 32) throw new Error('Cloudflare cihaz oturumu geçersiz.');
+  clearDesktopMemory();
+  await desktop.saveRefreshToken(refreshToken);
+  return restoreDesktopSession();
+}
+
 export async function restoreDesktopSession(): Promise<DesktopSession> {
   if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
   if (refreshPromise) return refreshPromise;
