@@ -1,101 +1,114 @@
 import { expect, test } from '@playwright/test';
 
+const DEVICE_ID = `wpai-device-${'x'.repeat(48)}`;
+const REFRESH = `refresh-${'r'.repeat(80)}`;
+const NEXT_REFRESH = `refresh-${'n'.repeat(80)}`;
+
 function success(data, status = 200) {
   return { status, contentType: 'application/json', body: JSON.stringify({ ok: true, data }) };
 }
 
-function failure(code, message, status) {
-  return { status, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { code, message, requestId: 'auth-regression' } }) };
-}
+async function installPasswordlessDesktop(page, { setupError = null } = {}) {
+  await page.addInitScript(({ deviceId, refresh, setupErrorMessage }) => {
+    let storedRefresh = null;
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (command === 'cloudflare_connection_status') {
+          return { configured: false, accountId: 'hidden-account-id', storage: 'Windows Credential Manager' };
+        }
+        if (command === 'get_or_create_device_id') return deviceId;
+        if (command === 'save_desktop_refresh_token') { storedRefresh = args.token; return null; }
+        if (command === 'load_desktop_refresh_token') return storedRefresh;
+        if (command === 'remove_desktop_refresh_token') { storedRefresh = null; return null; }
+        if (command === 'cloudflare_setup') {
+          if (setupErrorMessage) throw new Error(setupErrorMessage);
+          if ('adminEmail' in args || 'adminPassword' in args || 'adminName' in args) {
+            throw new Error('Legacy administrator credentials reached native setup');
+          }
+          return {
+            ok: true,
+            mode: 'device_session',
+            version: 'device-bootstrap-v6',
+            admin: { id: 'owner-1', name: 'WPAI', email: 'wpai@local.invalid', role: 'owner' },
+            session: { refreshToken: refresh, refreshExpiresAt: '2026-09-06T00:00:00.000Z', deviceId: 'device-row-1' },
+            report: { emailPromptRequired: false, passwordPromptRequired: false }
+          };
+        }
+        if (command === 'show_desktop_notification') return null;
+        throw new Error(`Unexpected desktop command: ${command}`);
+      },
+      transformCallback: () => 1,
+      unregisterCallback: () => undefined,
+      convertFileSrc: value => value,
+      metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } }
+    };
+  }, { deviceId: DEVICE_ID, refresh: REFRESH, setupErrorMessage: setupError });
 
-async function installAuthMocks(page, options) {
-  const captured = { setup: null };
   await page.route('**/*', async route => {
     const request = route.request();
     const url = new URL(request.url());
-    const pathname = url.pathname;
-
-    if (pathname === '/health') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        ok: true,
-        components: { worker: true, d1: true, r2Binding: true, queuesBinding: true, workersAiBinding: true, vectorizeBinding: true }
-      }) });
-      return;
-    }
-    if (!pathname.startsWith('/api/')) {
-      await route.continue();
-      return;
-    }
-    if (pathname === '/api/auth/setup-status') {
-      await route.fulfill(success({ required: options.mode === 'setup' }));
-      return;
-    }
-    if (pathname === '/api/auth/me') {
-      await route.fulfill(failure('UNAUTHORIZED', 'Oturum gerekli.', 401));
-      return;
-    }
-    if (pathname === '/api/auth/setup') {
-      captured.setup = request.postDataJSON();
+    if (url.pathname === '/api/auth/desktop/refresh') {
+      const body = request.postDataJSON();
+      expect(body.deviceId).toBe(DEVICE_ID);
+      expect(body.refreshToken).toBe(REFRESH);
       await route.fulfill(success({
-        admin: { id: 'admin-1', name: 'Test Yönetici', email: 'owner@example.com', role: 'owner' },
-        csrfToken: 'csrf-auth-regression'
-      }, 201));
-      return;
-    }
-    if (pathname === '/api/auth/login') {
-      if (options.failLogin) {
-        await route.fulfill(failure('INVALID_CREDENTIALS', 'E-posta veya parola hatalı.', 401));
-      } else {
-        await route.fulfill(success({
-          admin: { id: 'admin-1', name: 'Test Yönetici', email: 'owner@example.com', role: 'owner' },
-          csrfToken: 'csrf-auth-regression'
-        }));
-      }
-      return;
-    }
-    if (pathname === '/api/branding') {
-      await route.fulfill(success({
-        app_name: 'WPAI Yönetim Paneli', company_name: 'Test İşletmesi', short_description: '', logo_key: null,
-        primary_color: '#7657ff', secondary_color: '#22c7e8', updated_at: '2026-08-04T00:00:00.000Z'
+        admin: { id: 'owner-1', name: 'WPAI', email: 'wpai@local.invalid', role: 'owner' },
+        deviceId: 'device-row-1',
+        accessToken: `access-${'a'.repeat(80)}`,
+        refreshToken: NEXT_REFRESH,
+        accessExpiresAt: '2026-08-07T20:00:00.000Z',
+        refreshExpiresAt: '2026-09-06T00:00:00.000Z'
       }));
       return;
     }
-    if (pathname === '/api/dashboard') {
-      await route.fulfill(success({ contacts: 0, activeConversations: 0, unreadMessages: 0, openHandoffs: 0, failedMessages: 0, unreadNotifications: 0 }));
+    if (url.pathname === '/api/branding') {
+      await route.fulfill(success({
+        app_name: 'WPAI Yönetim Paneli', company_name: 'Test İşletmesi', short_description: '', logo_key: null,
+        primary_color: '#7657ff', secondary_color: '#22c7e8', updated_at: '2026-08-07T00:00:00.000Z'
+      }));
       return;
     }
-    await route.fulfill(success([]));
+    if (url.pathname === '/health') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, components: { worker: true, d1: true } }) });
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) {
+      await route.fulfill(success([]));
+      return;
+    }
+    await route.continue();
   });
-  return captured;
 }
 
-test('a six-character numeric password completes first administrator setup', async ({ page }) => {
-  const captured = await installAuthMocks(page, { mode: 'setup', failLogin: false });
+test('passwordless desktop setup asks only for Cloudflare API token and opens a device session', async ({ page }) => {
+  await installPasswordlessDesktop(page);
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'İlk Yönetici Kurulumu' })).toBeVisible();
-  await expect(page.getByLabel('Yeni parola')).toHaveAttribute('minlength', '6');
-  await page.getByLabel('Ad soyad').fill('Test Yönetici');
-  await page.getByLabel('E-posta').fill('owner@example.com');
-  await page.getByLabel('Yeni parola').fill('123456');
-  await page.getByLabel('Parola tekrarı').fill('123456');
-  await page.getByLabel('Kurulum anahtarı').fill('bootstrap-token-for-regression');
-  await page.getByRole('button', { name: 'Yönetici Hesabını Oluştur' }).click();
+  await expect(page.getByRole('heading', { name: 'Cloudflare Bağlantısı' })).toBeVisible();
+  await expect(page.getByLabel('Cloudflare User veya Account API Token')).toBeVisible();
+  await expect(page.getByText('Yönetici e-postası, kullanıcı adı veya parola istenmez.')).toBeVisible();
+  await expect(page.getByLabel(/e-posta/i)).toHaveCount(0);
+  await expect(page.getByLabel(/yeni parola/i)).toHaveCount(0);
+  await expect(page.getByLabel(/parola tekrarı/i)).toHaveCount(0);
+
+  await page.getByLabel('Cloudflare User veya Account API Token').fill(`cfat_${'a'.repeat(44)}`);
+  await page.getByRole('button', { name: 'Bağlantıyı Kur ve Panele Aç' }).click();
 
   await expect(page.locator('.app-shell')).toBeVisible();
-  expect(captured.setup?.password).toBe('123456');
+  await expect(page.getByRole('button', { name: 'Gösterge Paneli' })).toBeVisible();
+  await expect(page.locator('.toast.success')).toContainText('E-posta veya parola gerekmiyor');
 });
 
-test('a rejected login always displays a readable error instead of appearing inactive', async ({ page }) => {
-  await installAuthMocks(page, { mode: 'login', failLogin: true });
+test('a D1 schema timeout is shown as its real stage and never rewritten as a missing-permission error', async ({ page }) => {
+  await installPasswordlessDesktop(page, {
+    setupError: 'admins şema kontrolü zaman aşımına uğradı [device-bootstrap-v6].'
+  });
   await page.goto('/');
+  await page.getByLabel('Cloudflare User veya Account API Token').fill(`cfat_${'a'.repeat(44)}`);
+  await page.getByRole('button', { name: 'Bağlantıyı Kur ve Panele Aç' }).click();
 
-  await expect(page.getByRole('heading', { name: 'WPAI Yönetim Paneli' })).toBeVisible();
-  await expect(page.getByLabel('Parola')).toHaveAttribute('minlength', '1');
-  await page.getByLabel('E-posta').fill('owner@example.com');
-  await page.getByLabel('Parola').fill('123456');
-  await page.getByRole('button', { name: 'Giriş Yap' }).click();
-
-  await expect(page.getByRole('alert')).toContainText('E-posta veya parola hatalı.');
-  await expect(page.locator('.toast.error')).toContainText('E-posta veya parola hatalı.');
+  await expect(page.locator('.toast.error')).toContainText('admins şema kontrolü zaman aşımına uğradı');
+  await expect(page.locator('.toast.error')).not.toContainText('D1 Read');
+  await expect(page.locator('.toast.error')).not.toContainText('D1 Write');
+  await expect(page.locator('.toast.error')).not.toContainText('izin');
 });
