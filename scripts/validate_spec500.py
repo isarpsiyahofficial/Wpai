@@ -86,9 +86,11 @@ def validate_critical_runtime_gates() -> None:
         "src/frontend/App.tsx",
         "phase: 'connections'",
         "DesktopConnectionsPage",
-        "Ayarlar > Bağlantılar",
         "cloudflareConnectionStatus",
-        "Bağlantıyı Kaldır"
+        "Bağlantıyı Kaldır",
+        "Yalnız Cloudflare API tokeni kullanılır",
+        "Yönetici e-postası, kullanıcı adı veya parola istenmez",
+        "device-bootstrap-v6"
     )
     forbid(
         "src/frontend/App.tsx",
@@ -96,7 +98,24 @@ def validate_critical_runtime_gates() -> None:
         "OfflineDesktopPage",
         "Yerel Bilgi Modu",
         "Buluta Yeniden Bağlan",
-        "Cloudflare Kurulumu ve Onarımı"
+        "Cloudflare Kurulumu ve Onarımı",
+        "Yönetici e-postası<input",
+        "Yeni parola<input",
+        "Parola tekrarı<input",
+        "Panele Giriş Yap"
+    )
+    require(
+        "desktop-bootstrap/bootstrap-v6.mjs",
+        "device-bootstrap-v6",
+        "emailPromptRequired: false",
+        "passwordPromptRequired: false",
+        "Yeni cihaz oturumunu oluşturma"
+    )
+    require(
+        "desktop-bootstrap/bootstrap-v6.test.mjs",
+        "Linux scenario",
+        "never asks for email or password",
+        "never as a fake permission error"
     )
     require(
         "src/frontend/pages/settings.tsx",
@@ -153,7 +172,7 @@ def main() -> None:
     validate_versions_and_brand()
     validate_critical_runtime_gates()
     validate_security_and_scope()
-    print("500/500 evidence validation passed: connection management remains Settings-only, persistent and removable while all security and runtime gates remain present.")
+    print("500/500 evidence validation passed: Cloudflare connection remains Settings-only and desktop onboarding is passwordless while all security and runtime gates remain present.")
 
 
 if __name__ == "__main__":
