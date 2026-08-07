@@ -1,17 +1,14 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import {
+  activateDesktopBootstrapSession,
   api,
   apiObjectUrl,
-  desktopLogin,
   desktopLogout,
   downloadApiFile,
   formValue,
   isDesktop,
-  jsonBody,
-  publicApi,
   publicRawJson,
-  restoreDesktopSession,
-  setCsrfToken
+  restoreDesktopSession
 } from './api';
 import type { Admin, Health, Notify, PageId } from './types';
 import { AiPage, ContactsPage, DashboardPage, FilesPage, KnowledgePage, NotificationsPage, ReportsPage, SettingsPage, TrainingPage, WhatsAppPage } from './pages';
@@ -32,7 +29,7 @@ const NAV: Array<{ id: PageId; label: string; icon: string }> = [
 
 const CLOUDFLARE_ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
 
-type AuthState = { phase: 'loading' | 'setup' | 'connections' | 'login' | 'ready'; admin?: Admin };
+type AuthState = { phase: 'loading' | 'connections' | 'ready' | 'unsupported'; admin?: Admin };
 type Toast = { message: string; kind: 'success' | 'error' | 'info' } | null;
 type CloudflareConnection = { configured: boolean; accountId: string; storage: string };
 type Branding = {
@@ -86,53 +83,31 @@ export function App() {
   }, []);
 
   const boot = useCallback(async () => {
+    if (!desktopMode) {
+      setAuth({ phase: 'unsupported' });
+      return;
+    }
+
     let currentConnection = DEFAULT_CONNECTION;
-    if (desktopMode) {
-      try {
-        const connection = await desktop.cloudflareConnectionStatus();
-        currentConnection = connection;
-        setCloudflareConnection(connection);
-        if (!connection.configured || !navigator.onLine) {
-          openConnections(connection);
-          return;
-        }
-      } catch {
-        openConnections(DEFAULT_CONNECTION);
-        return;
-      }
+    try {
+      currentConnection = await desktop.cloudflareConnectionStatus();
+      setCloudflareConnection(currentConnection);
+    } catch {
+      openConnections(DEFAULT_CONNECTION);
+      return;
+    }
+
+    if (!currentConnection.configured || !navigator.onLine) {
+      openConnections(currentConnection);
+      return;
     }
 
     try {
-      const setup = await publicApi<{ required: boolean }>('/api/auth/setup-status');
-      if (setup.required) {
-        if (desktopMode) openConnections(currentConnection);
-        else setAuth({ phase: 'setup' });
-        return;
-      }
-      if (desktopMode) {
-        try {
-          const session = await restoreDesktopSession();
-          setAuth({ phase: 'ready', admin: session.admin });
-        } catch {
-          setAuth({ phase: 'login' });
-        }
-        return;
-      }
-      try {
-        const me = await api<{ admin: Admin; csrfToken: string }>('/api/auth/me');
-        setCsrfToken(me.csrfToken);
-        setAuth({ phase: 'ready', admin: me.admin });
-      } catch {
-        setAuth({ phase: 'login' });
-      }
-    } catch (error) {
-      if (desktopMode) {
-        openConnections(currentConnection);
-        notify('Bulut bağlantısı doğrulanamadı. Ayarlar > Bağlantılar bölümünü kontrol edin.', 'info');
-        return;
-      }
-      notify(error instanceof Error ? error.message : 'Uygulama başlatılamadı.', 'error');
-      setAuth({ phase: 'login' });
+      const session = await restoreDesktopSession();
+      setAuth({ phase: 'ready', admin: session.admin });
+    } catch {
+      openConnections(currentConnection);
+      notify('Bu cihazın bulut oturumu yenilenmeli. Yalnız Cloudflare API tokenini yeniden doğrulayın; e-posta veya parola gerekmiyor.', 'info');
     }
   }, [desktopMode, notify, openConnections]);
 
@@ -201,28 +176,16 @@ export function App() {
     return () => document.removeEventListener('click', intercept);
   }, [auth.phase, desktopMode, notify]);
 
-  const logout = useCallback(async () => {
-    if (desktopMode) await desktopLogout();
-    else {
-      try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* clear locally */ }
-      setCsrfToken('');
-    }
-    setHealth(null);
-    setAuth({ phase: 'login' });
-  }, [desktopMode]);
-
   const authToast = toast && <div className={`toast ${toast.kind}`} role="status" aria-live="assertive">{toast.message}</div>;
   if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>Güvenli panel hazırlanıyor…</p></Centered>{authToast}</>;
+  if (auth.phase === 'unsupported') return <><Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>WPAI Masaüstü Uygulaması</h1><p>Bu yönetim paneli cihaz oturumu ile çalışır. E-posta veya parola girişi kullanılmaz.</p></section></Centered>{authToast}</>;
   if (auth.phase === 'connections') return <><DesktopConnectionsPage
     connection={cloudflareConnection}
     online={online}
     notify={notify}
     onConnectionChange={setCloudflareConnection}
-    onLogin={() => setAuth({ phase: 'login' })}
     onReady={admin => setAuth({ phase: 'ready', admin })}
   />{authToast}</>;
-  if (auth.phase === 'setup') return <><AuthCard title="İlk Yönetici Kurulumu" description="Yönetici hesabınızı oluşturun. Kurulum bir kez tamamlandıktan sonra bu ekran kapanır."><SetupForm onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>{authToast}</>;
-  if (auth.phase === 'login') return <><AuthCard title="WPAI Yönetim Paneli" description={desktopMode ? 'Güvenli Windows oturumuyla giriş yapın' : 'WhatsApp görüşmeleri ve kontrollü AI yönetimi'}><LoginForm desktopMode={desktopMode} onReady={(admin, csrf) => { setCsrfToken(csrf); setAuth({ phase: 'ready', admin }); }} notify={notify} /></AuthCard>{authToast}</>;
 
   const brandInitial = (branding.app_name || 'W').trim().slice(0, 1).toUpperCase();
   return <div className={`app-shell ${collapsed ? 'collapsed' : ''}`}>
@@ -237,7 +200,7 @@ export function App() {
     <main className="main">
       <header className="topbar">
         <div><h1>{NAV.find(item => item.id === page)?.label}</h1><p>{branding.company_name || 'Tek işletme'} · Kesin müşteri ayrımı · {desktopMode ? 'Windows uygulaması' : 'Güvenli Cloudflare altyapısı'}</p></div>
-        <div className="top-actions"><span className={`pill ${health?.ok ? 'ready' : 'warn'}`}>{health?.ok ? 'Bağlı' : 'Bağlantı kontrol ediliyor'}</span><span className="admin-name">{auth.admin?.name}</span><button className="button ghost" onClick={() => void logout()}>Çıkış</button></div>
+        <div className="top-actions"><span className={`pill ${health?.ok ? 'ready' : 'warn'}`}>{health?.ok ? 'Bağlı' : 'Bağlantı kontrol ediliyor'}</span><span className="admin-name">{auth.admin?.name}</span><button className="button ghost" onClick={() => openConnections(cloudflareConnection)}>Bağlantılar</button></div>
       </header>
       <section className="content">
         {page === 'dashboard' && <DashboardPage notify={notify} openPage={setPage} />}
@@ -265,18 +228,16 @@ function DesktopConnectionsPage({
   online,
   notify,
   onConnectionChange,
-  onLogin,
   onReady
 }: {
   connection: CloudflareConnection;
   online: boolean;
   notify: Notify;
   onConnectionChange: (connection: CloudflareConnection) => void;
-  onLogin: () => void;
   onReady: (admin: Admin) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [showUpdate, setShowUpdate] = useState(false);
+  const [showUpdate, setShowUpdate] = useState(connection.configured);
 
   async function refreshConnection() {
     const value = await desktop.cloudflareConnectionStatus();
@@ -299,6 +260,20 @@ function DesktopConnectionsPage({
     } finally { setBusy(false); }
   }
 
+  async function connectWithToken(token: string) {
+    const deviceId = await desktop.getOrCreateDeviceId();
+    const result = await desktop.cloudflareSetup({
+      accountId: CLOUDFLARE_ACCOUNT_ID,
+      apiToken: token,
+      deviceId
+    });
+    const refreshToken = result.session?.refreshToken;
+    if (!refreshToken) throw new Error('Cloudflare bağlantısı kuruldu ancak cihaz oturumu oluşturulamadı [device-bootstrap-v6].');
+    const session = await activateDesktopBootstrapSession(refreshToken);
+    await refreshConnection();
+    return session;
+  }
+
   async function updateConnection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -308,11 +283,11 @@ function DesktopConnectionsPage({
     }
     setBusy(true);
     try {
-      await desktop.cloudflareScan(CLOUDFLARE_ACCOUNT_ID, formValue(form, 'apiToken'));
+      const session = await connectWithToken(formValue(form, 'apiToken'));
       form.reset();
       setShowUpdate(false);
-      await refreshConnection();
-      notify('Cloudflare bağlantısı güncellendi ve güvenli biçimde kaydedildi.', 'success');
+      notify('Cloudflare bağlantısı ve bu cihazın güvenli oturumu yenilendi.', 'success');
+      onReady(session.admin);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı güncellenemedi.', 'error');
     } finally { setBusy(false); }
@@ -325,24 +300,10 @@ function DesktopConnectionsPage({
       return;
     }
     const form = event.currentTarget;
-    const password = formValue(form, 'password');
-    if (password !== formValue(form, 'confirm')) {
-      notify('Parolalar eşleşmiyor.', 'error');
-      return;
-    }
     setBusy(true);
     try {
-      const email = formValue(form, 'email');
-      await desktop.cloudflareSetup({
-        accountId: CLOUDFLARE_ACCOUNT_ID,
-        apiToken: formValue(form, 'apiToken'),
-        adminName: formValue(form, 'name'),
-        adminEmail: email,
-        adminPassword: password
-      });
-      await refreshConnection();
-      const session = await desktopLogin(email, password);
-      notify('Cloudflare bağlantısı kuruldu ve bağlı olarak kaydedildi.', 'success');
+      const session = await connectWithToken(formValue(form, 'apiToken'));
+      notify('Cloudflare bağlantısı kuruldu. E-posta veya parola gerekmiyor.', 'success');
       onReady(session.admin);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kurulamadı.', 'error');
@@ -353,6 +314,7 @@ function DesktopConnectionsPage({
     if (!window.confirm('Bu bilgisayardaki Cloudflare bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
     setBusy(true);
     try {
+      await desktopLogout().catch(() => undefined);
       await desktop.cloudflareForget();
       const value = await refreshConnection();
       setShowUpdate(false);
@@ -378,7 +340,7 @@ function DesktopConnectionsPage({
           {!online && <section className="panel"><div className="panel-heading"><div><h3>İnternet bağlantısı yok</h3><p>Kayıtlı bağlantı silinmedi. İnternet geldiğinde yeniden doğrulayabilirsiniz.</p></div><span className="pill warn">Çevrimdışı</span></div></section>}
           <section className="panel">
             <div className="panel-heading">
-              <div><h3>Cloudflare Bağlantısı</h3><p>Bağlantı yalnız bu Ayarlar ekranından kurulur, güncellenir veya kaldırılır.</p></div>
+              <div><h3>Cloudflare Bağlantısı</h3><p>Yalnız Cloudflare API tokeni kullanılır. Yönetici e-postası, kullanıcı adı veya parola istenmez.</p></div>
               <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Bağlı' : 'Bağlantı yok'}</span>
             </div>
 
@@ -390,22 +352,18 @@ function DesktopConnectionsPage({
               </div>
               <div className="form-actions">
                 <button type="button" className="button secondary" disabled={busy || !online} onClick={() => void verifyConnection()}>{busy ? 'Doğrulanıyor…' : 'Bağlantıyı Doğrula'}</button>
-                <button type="button" className="button secondary" disabled={busy} onClick={() => setShowUpdate(value => !value)}>Bağlantı Bilgisini Güncelle</button>
-                <button type="button" className="button primary" disabled={busy || !online} onClick={onLogin}>Panele Giriş Yap</button>
+                <button type="button" className="button secondary" disabled={busy} onClick={() => setShowUpdate(value => !value)}>{showUpdate ? 'Token Alanını Kapat' : 'Cihaz Oturumunu Yenile'}</button>
                 <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bağlantıyı Kaldır</button>
               </div>
               {showUpdate && <form className="form-stack" onSubmit={updateConnection}>
-                <label>Yeni Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
-                <div className="form-actions"><button className="button primary" disabled={busy || !online}>Doğrula ve Güncelle</button><button type="button" className="button secondary" onClick={() => setShowUpdate(false)}>Vazgeç</button></div>
+                <label>Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
+                <p className="safe-note">Bu işlem yalnız tokeni doğrular ve bu cihaz için yeni güvenli oturum üretir. E-posta ve parola kullanılmaz.</p>
+                <div className="form-actions"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlanıyor…' : 'Doğrula ve Panele Aç'}</button></div>
               </form>}
             </> : <form className="form-grid" onSubmit={setupConnection}>
               <label className="wide">Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
-              <label>Yönetici adı<input name="name" required minLength={2} /></label>
-              <label>Yönetici e-postası<input name="email" type="email" required autoComplete="username" /></label>
-              <label>Yeni parola<input name="password" type="password" required minLength={6} autoComplete="new-password" /></label>
-              <label>Parola tekrarı<input name="confirm" type="password" required minLength={6} autoComplete="new-password" /></label>
-              <p className="safe-note wide">Cloudflare panelinde oluşturulan User API Token veya Account API Token kullanılabilir. Token ID ya da Global API Key kullanmayın. Bağlantı doğrulandığında bu bilgisayarda güvenli biçimde saklanır ve uygulama yeniden açıldığında bağlı kalır.</p>
-              <div className="form-actions wide"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur'}</button></div>
+              <p className="safe-note wide">Token ID veya Global API Key kullanmayın. Bağlantı doğrulandığında token Windows Credential Manager'da, cihaz oturumu ise ayrı güvenli kayıtta saklanır. Yönetici e-postası veya parola oluşturmanız gerekmez.</p>
+              <div className="form-actions wide"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur ve Panele Aç'}</button></div>
             </form>}
           </section>
         </div>
@@ -414,59 +372,4 @@ function DesktopConnectionsPage({
   </div>;
 }
 
-function SetupForm({ onReady, notify }: { onReady: (admin: Admin, csrf: string) => void; notify: Notify }) {
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const password = formValue(form, 'password');
-    const confirm = formValue(form, 'confirm');
-    if (password !== confirm) { notify('Parolalar eşleşmiyor.', 'error'); return; }
-    setBusy(true);
-    try {
-      const result = await publicApi<{ admin: Admin; csrfToken: string }>('/api/auth/setup', {
-        method: 'POST',
-        ...jsonBody({ name: formValue(form, 'name'), email: formValue(form, 'email'), password, bootstrapToken: formValue(form, 'bootstrapToken') })
-      });
-      onReady(result.admin, result.csrfToken);
-    } catch (error) { notify(error instanceof Error ? error.message : 'Kurulum tamamlanamadı.', 'error'); }
-    finally { setBusy(false); }
-  }
-  return <form onSubmit={submit} className="auth-form"><label>Ad soyad<input name="name" required minLength={2} /></label><label>E-posta<input name="email" type="email" required /></label><label>Yeni parola<input name="password" type="password" required minLength={6} /></label><label>Parola tekrarı<input name="confirm" type="password" required minLength={6} /></label><label>Kurulum anahtarı<input name="bootstrapToken" type="password" required /></label><button className="button primary" disabled={busy}>{busy ? 'Kuruluyor…' : 'Yönetici Hesabını Oluştur'}</button></form>;
-}
-
-function LoginForm({ desktopMode, onReady, notify }: { desktopMode: boolean; onReady: (admin: Admin, csrf: string) => void; notify: Notify }) {
-  const [busy, setBusy] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const email = formValue(form, 'email');
-    const password = formValue(form, 'password');
-    setErrorMessage('');
-    setBusy(true);
-    try {
-      if (desktopMode) {
-        const session = await desktopLogin(email, password);
-        onReady(session.admin, '');
-      } else {
-        const result = await publicApi<{ admin: Admin; csrfToken: string }>('/api/auth/login', {
-          method: 'POST',
-          ...jsonBody({ email, password })
-        });
-        onReady(result.admin, result.csrfToken);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Giriş başarısız.';
-      setErrorMessage(message);
-      notify(message, 'error');
-    }
-    finally { setBusy(false); }
-  }
-  return <form onSubmit={submit} className="auth-form"><label>E-posta<input name="email" type="email" required autoComplete="username" /></label><label>Parola<input name="password" type="password" required minLength={1} autoComplete="current-password" /></label>{errorMessage && <p className="safe-note" role="alert" aria-live="assertive">{errorMessage}</p>}<button className="button primary" disabled={busy}>{busy ? 'Giriş yapılıyor…' : 'Giriş Yap'}</button></form>;
-}
-
-function AuthCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-  return <Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>{title}</h1><p>{description}</p>{children}</section></Centered>;
-}
 function Centered({ children }: { children: React.ReactNode }) { return <main className="centered">{children}</main>; }
