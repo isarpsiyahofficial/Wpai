@@ -293,21 +293,6 @@ export function SettingsPage({
     } catch (error) { notify(error instanceof Error ? error.message : 'İş kapatılamadı.', 'error'); }
   }
 
-  async function changePassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const currentPassword = formValue(form, 'current');
-    const newPassword = formValue(form, 'next');
-    const confirm = formValue(form, 'confirm');
-    if (newPassword !== confirm) { notify('Yeni parolalar eşleşmiyor.', 'error'); return; }
-    try {
-      await api('/api/auth/change-password', {
-        method: 'POST', ...jsonBody({ currentPassword, newPassword, revokeOtherSessions: true })
-      });
-      form.reset(); notify('Parola değiştirildi ve diğer oturumlar kapatıldı.', 'success');
-    } catch (error) { notify(error instanceof Error ? error.message : 'Parola değiştirilemedi.', 'error'); }
-  }
-
   async function runDeepHealth() {
     setBusy(true);
     try {
@@ -341,11 +326,12 @@ export function SettingsPage({
         </div>
         {showCloudflareUpdate && <form className="form-stack" onSubmit={saveCloudflareConnection}>
           <label>Yeni Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" value={token} onChange={event => setToken(event.target.value)} /></label>
+          <p className="safe-note">Bu bağlantı cihaz oturumu ile çalışır; yönetici e-postası veya panel parolası kullanılmaz.</p>
           <div className="form-actions"><button className="button primary" disabled={busy}>Doğrula ve Güncelle</button><button type="button" className="button secondary" onClick={() => { setToken(''); setShowCloudflareUpdate(false); }}>Vazgeç</button></div>
         </form>}
       </> : <form className="form-stack" onSubmit={saveCloudflareConnection}>
         <label>Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" value={token} onChange={event => setToken(event.target.value)} /></label>
-        <p className="safe-note">Bağlantı doğrulanınca bu bilgisayarda güvenli biçimde saklanır. Account ID ve diğer teknik kimlikler kullanıcı ekranında gösterilmez.</p>
+        <p className="safe-note">Bağlantı doğrulanınca bu bilgisayarda güvenli biçimde saklanır. Account ID ve diğer teknik kimlikler kullanıcı ekranında gösterilmez; yönetici e-postası veya panel parolası kullanılmaz.</p>
         <button className="button primary" disabled={busy}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur'}</button>
       </form>}
     </section>
@@ -386,8 +372,7 @@ export function SettingsPage({
       <div className="panel"><h3>Logo</h3><p>Logo R2’nin özel alanında saklanır; public bucket açılmaz.</p>{logoUrl && <img className="settings-logo-preview" src={logoUrl} alt="Mevcut logo" />}<form className="form-stack" onSubmit={uploadLogo}><label>Yeni logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp" required /></label><button className="button secondary">Logoyu Yükle</button></form></div>
     </section>
 
-    <section className="grid-two"><div className="panel"><h3>Hazır Cevaplar</h3><form className="form-stack" onSubmit={saveReply}><label>Başlık<input name="title" required /></label><label>Mesaj<textarea name="body" rows={5} required /></label><button className="button primary">Hazır Cevap Ekle</button></form><div className="knowledge-list">{replies.map(reply => <article key={reply.id}><div><span>{reply.status} · {formatDate(reply.updated_at)}</span><h4>{reply.title}</h4><p>{reply.body}</p></div><div className="form-actions"><button className="text-button" onClick={() => void editReply(reply)}>Düzenle</button><button className="text-button danger" onClick={() => void disableReply(reply)}>Devre Dışı</button></div></article>)}</div>{!replies.length && <Empty text="Hazır cevap yok." />}</div>
-      <div className="panel"><h3>Parola Değiştir</h3><form className="form-stack" onSubmit={changePassword}><label>Mevcut parola<input name="current" type="password" required /></label><label>Yeni parola<input name="next" type="password" minLength={6} required /></label><label>Yeni parola tekrarı<input name="confirm" type="password" minLength={6} required /></label><button className="button primary">Parolayı Değiştir</button></form></div></section>
+    <section className="panel"><h3>Hazır Cevaplar</h3><form className="form-stack" onSubmit={saveReply}><label>Başlık<input name="title" required /></label><label>Mesaj<textarea name="body" rows={5} required /></label><button className="button primary">Hazır Cevap Ekle</button></form><div className="knowledge-list">{replies.map(reply => <article key={reply.id}><div><span>{reply.status} · {formatDate(reply.updated_at)}</span><h4>{reply.title}</h4><p>{reply.body}</p></div><div className="form-actions"><button className="text-button" onClick={() => void editReply(reply)}>Düzenle</button><button className="text-button danger" onClick={() => void disableReply(reply)}>Devre Dışı</button></div></article>)}</div>{!replies.length && <Empty text="Hazır cevap yok." />}</section>
 
     <section className="panel"><div className="panel-heading"><div><h3>Başarısız Kuyruk İşleri</h3><p>Payload secret alanları redakte edilir. Yalnız doğrulanmış kaynak kuyruğuna kontrollü yeniden deneme yapılır.</p></div></div><div className="knowledge-list">{deadLetters.map(item => <article key={item.id}><div><span>{item.source_queue} · {item.status} · {formatDate(item.failed_at)}</span><h4>{item.error_code}</h4><pre>{safePayload(item.payload_json)}</pre><small>{item.attempts} yeniden deneme</small></div>{item.status === 'pending' && <div className="form-actions"><button className="text-button" onClick={() => void retryDeadLetter(item)}>Yeniden Dene</button><button className="text-button danger" onClick={() => void discardDeadLetter(item)}>Kapat</button></div>}</article>)}</div>{!deadLetters.length && <Empty text="Bekleyen başarısız kuyruk işi yok." />}</section>
 
