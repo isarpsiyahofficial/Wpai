@@ -103,13 +103,7 @@ export const desktop = {
     return requiredInvoke('cloudflare_repair', { accountId, actions, apiToken: apiToken || null });
   },
   cloudflareSetup(input: { accountId: string; apiToken: string; deviceId: string }): Promise<CloudflareBootstrapResult> {
-    return requiredInvoke('cloudflare_setup', {
-      accountId: input.accountId,
-      apiToken: input.apiToken,
-      adminName: input.deviceId,
-      adminEmail: 'device-session@wpai.local',
-      adminPassword: 'device-bootstrap-v6'
-    });
+    return requiredInvoke('cloudflare_setup', input);
   },
   cloudflareForget(): Promise<{ forgotten: boolean; accountId: string }> {
     return requiredInvoke('cloudflare_forget');
