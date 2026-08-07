@@ -12,24 +12,27 @@ if (!installedNode || !installedBootstrap || !evidencePath) {
 for (const required of [installedNode, installedBootstrap]) {
   if (!fs.statSync(required).isFile()) throw new Error(`Installed runtime file missing: ${required}`);
 }
+assert.equal(path.basename(installedBootstrap).toLowerCase(), 'bootstrap-v5.mjs');
 
 const ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
 const D1_ID = '81983219-f57b-487b-8144-7c70bf9b1fe2';
 const ACCOUNT_TOKEN = `cfat_${'a'.repeat(44)}`;
 const requested = [];
-const adminColumns = new Set(['id', 'email', 'password_hash', 'created_at']);
-const addedAdminColumns = [];
+const fullAdminColumns = [
+  'id', 'name', 'email', 'password_hash', 'role', 'status', 'failed_login_count',
+  'locked_until', 'last_login_at', 'created_at', 'updated_at', 'deleted_at'
+];
 const salt = Buffer.alloc(16, 9);
 const staleHash = crypto.pbkdf2Sync('old-password', salt, 310000, 32, 'sha256');
 let owner = {
   _rowid: 1,
   id: 'stale-owner',
-  name: null,
+  name: 'Eski Yönetici',
   email: 'stale-owner@example.com',
   password_hash: `pbkdf2-sha256$310000$${salt.toString('base64')}$${staleHash.toString('base64')}`,
-  last_login_at: null,
+  last_login_at: '2026-08-01T10:00:00.000Z',
   created_at: '2026-08-01T00:00:00.000Z',
-  updated_at: null
+  updated_at: '2026-08-01T10:00:00.000Z'
 };
 const recovery = {
   adminSessionsRevoked: false,
@@ -39,15 +42,14 @@ const recovery = {
   ownerUpdated: false,
   auditWritten: false
 };
+let loginAttempts = 0;
 
 function cloudflareSuccess(result) {
   return JSON.stringify({ success: true, errors: [], messages: [], result });
 }
-
 function d1Success(results = [], changes = 0) {
   return cloudflareSuccess([{ success: true, results, meta: { changes } }]);
 }
-
 function workerSuccess(data) {
   return JSON.stringify({ ok: true, data });
 }
@@ -72,67 +74,37 @@ const server = http.createServer((request, response) => {
     let raw = '';
     request.on('data', chunk => { raw += chunk; });
     request.on('end', () => {
-      const body = JSON.parse(raw);
+      const body = JSON.parse(raw || '{}');
       const sql = String(body.sql).replace(/\s+/g, ' ').trim();
-      if (sql === 'PRAGMA table_info(admins)') {
-        response.end(d1Success([...adminColumns].map(name => ({ name }))));
-        return;
-      }
-      const adminAlter = sql.match(/^ALTER TABLE admins ADD COLUMN (\w+) /);
-      if (adminAlter) {
-        adminColumns.add(adminAlter[1]);
-        addedAdminColumns.push(adminAlter[1]);
-        response.end(d1Success([], 1));
-        return;
-      }
-      if (sql === 'SELECT rowid AS _rowid,id,created_at,updated_at FROM admins') {
-        response.end(d1Success([owner]));
-        return;
-      }
-      if (sql.startsWith('UPDATE admins SET id=?,created_at=?,updated_at=? WHERE rowid=?')) {
-        owner = { ...owner, id: body.params[0], created_at: body.params[1], updated_at: body.params[2] };
-        response.end(d1Success([], 1));
-        return;
-      }
-      if (sql.startsWith('PRAGMA table_info(')) {
-        response.end(d1Success([]));
-        return;
-      }
-      if (sql.startsWith('CREATE TABLE IF NOT EXISTS') || sql.startsWith('CREATE INDEX IF NOT EXISTS') || sql.startsWith('ALTER TABLE ')) {
-        response.end(d1Success());
-        return;
-      }
-      if (sql.startsWith('SELECT rowid AS _rowid,id,name,email,password_hash,last_login_at,created_at FROM admins')) {
-        response.end(d1Success([owner]));
-        return;
-      }
-      if (sql.startsWith('SELECT rowid AS _rowid FROM admins WHERE email=?')) {
-        response.end(d1Success([]));
-        return;
-      }
+      if (sql === 'PRAGMA table_info(admins)') return response.end(d1Success(fullAdminColumns.map(name => ({ name }))));
+      if (sql === 'SELECT rowid AS _rowid,id,created_at,updated_at FROM admins') return response.end(d1Success([owner]));
+      if (sql.startsWith('UPDATE admins SET id=?,created_at=?,updated_at=? WHERE rowid=?')) return response.end(d1Success([], 1));
+      if (sql.startsWith('CREATE TABLE IF NOT EXISTS') || sql.startsWith('CREATE INDEX IF NOT EXISTS')) return response.end(d1Success());
+      if (sql.startsWith('PRAGMA table_info(')) return response.end(d1Success([]));
+      if (sql.startsWith('ALTER TABLE ')) return response.end(d1Success([], 1));
+      if (sql.startsWith('SELECT rowid AS _rowid,id,name,email,password_hash,last_login_at,created_at FROM admins')) return response.end(d1Success([owner]));
+      if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) return response.end(d1Success([{ total: 1 }]));
+      if (sql.startsWith('SELECT rowid AS _rowid,id,name,email FROM admins')) return response.end(d1Success([owner]));
+      if (sql.startsWith('SELECT rowid AS _rowid FROM admins WHERE lower(email)=lower(?)')) return response.end(d1Success([]));
       if (sql.startsWith('UPDATE admin_sessions SET revoked_at=?')) {
         recovery.adminSessionsRevoked = true;
-        response.end(d1Success([], 1));
-        return;
+        return response.end(d1Success([], 1));
       }
       if (sql.startsWith('UPDATE desktop_sessions SET revoked_at=?')) {
         recovery.desktopSessionsRevoked = true;
-        response.end(d1Success([], 1));
-        return;
+        return response.end(d1Success([], 1));
       }
       if (sql.startsWith("UPDATE desktop_devices SET status='revoked'")) {
         recovery.devicesRevoked = true;
-        response.end(d1Success([], 1));
-        return;
+        return response.end(d1Success([], 1));
       }
       if (sql.startsWith('DELETE FROM login_attempts WHERE email_hash IN')) {
         recovery.loginThrottleCleared = true;
-        response.end(d1Success([], 2));
-        return;
+        return response.end(d1Success([], 2));
       }
       if (sql.startsWith('UPDATE admins SET id=?,name=?,email=?,password_hash=?')) {
         assert.equal(body.params[1], 'İbrahim');
-        assert.equal(body.params[2], 'allinagunes@gmail.com');
+        assert.equal(body.params[2], 'bestcreative1507@gmail.com');
         assert.match(body.params[3], /^pbkdf2-sha256\$310000\$/);
         owner = {
           ...owner,
@@ -140,32 +112,32 @@ const server = http.createServer((request, response) => {
           name: body.params[1],
           email: body.params[2],
           password_hash: body.params[3],
-          last_login_at: null
+          last_login_at: null,
+          updated_at: body.params[5]
         };
         recovery.ownerUpdated = true;
-        response.end(d1Success([], 1));
-        return;
+        return response.end(d1Success([], 1));
       }
       if (sql.startsWith('INSERT INTO audit_logs')) {
         recovery.auditWritten = true;
-        response.end(d1Success([], 1));
-        return;
+        return response.end(d1Success([], 1));
       }
-      if (sql.startsWith("SELECT COUNT(*) AS total FROM admins WHERE role='owner'")) {
-        response.end(d1Success([{ total: 1 }]));
-        return;
-      }
-      response.end(d1Success());
+      return response.end(d1Success());
     });
     return;
   }
   if (request.url === '/api/auth/desktop/login') {
+    loginAttempts += 1;
     let raw = '';
     request.on('data', chunk => { raw += chunk; });
     request.on('end', () => {
-      const body = JSON.parse(raw);
-      assert.equal(recovery.ownerUpdated, true);
-      assert.equal(body.email, 'allinagunes@gmail.com');
+      const body = JSON.parse(raw || '{}');
+      if (!recovery.ownerUpdated) {
+        response.statusCode = 401;
+        response.end(JSON.stringify({ ok: false, error: { code: 'LOGIN_FAILED', message: 'E-posta veya parola hatalı.' } }));
+        return;
+      }
+      assert.equal(body.email, 'bestcreative1507@gmail.com');
       assert.equal(body.password, '123456');
       response.end(workerSuccess({
         admin: { id: owner.id, name: owner.name, email: owner.email, role: 'owner' },
@@ -198,7 +170,7 @@ try {
     accountId: ACCOUNT_ID,
     apiToken: ACCOUNT_TOKEN,
     adminName: 'İbrahim',
-    adminEmail: 'allinagunes@gmail.com',
+    adminEmail: 'bestcreative1507@gmail.com',
     adminPassword: '123456'
   });
 
@@ -225,16 +197,17 @@ try {
     child.stdin.end(payload);
   });
 
-  assert.equal(result.code, 0, `Installed bootstrap failed: ${result.stderr}\n${result.stdout}`);
+  assert.equal(result.code, 0, `Installed Recovery V5 bootstrap failed: ${result.stderr}\n${result.stdout}`);
   assert.doesNotMatch(result.stderr, /EISDIR|lstat/);
   const line = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
-  assert.ok(line, `Installed bootstrap produced no JSON: ${result.stderr}`);
+  assert.ok(line, `Installed Recovery V5 produced no JSON: ${result.stderr}`);
   const body = JSON.parse(line);
   assert.equal(body.ok, true);
   assert.equal(body.mode, 'connect_existing');
   assert.equal(body.report.tokenType, 'account');
-  assert.equal(body.admin.email, 'allinagunes@gmail.com');
-  assert.equal(addedAdminColumns.includes('name'), true);
+  assert.equal(body.admin.email, 'bestcreative1507@gmail.com');
+  assert.equal(body.recovery?.version, 'owner-reclaim-v5');
+  assert.equal(body.recovery?.ownerReclaimed, true);
   assert.deepEqual(recovery, {
     adminSessionsRevoked: true,
     desktopSessionsRevoked: true,
@@ -243,6 +216,7 @@ try {
     ownerUpdated: true,
     auditWritten: true
   });
+  assert.ok(loginAttempts >= 2, `expected failed login before recovery and successful login after recovery, got ${loginAttempts}`);
   assert.equal(requested.includes(`GET /accounts/${ACCOUNT_ID}/tokens/verify`), true);
   assert.equal(requested.includes('GET /user/tokens/verify'), false);
 
@@ -253,9 +227,10 @@ try {
     processExitCode: result.code,
     jsonParsed: true,
     tokenType: body.report.tokenType,
-    missingNameColumnRepaired: true,
-    repairedAdminColumns: addedAdminColumns,
+    recoveryVersion: body.recovery.version,
+    completeStaleOwnerReclaimed: true,
     recovery,
+    loginAttempts,
     accountTokenEndpointUsed: true,
     userTokenEndpointNotUsed: true,
     eisdirAbsent: !/EISDIR|lstat/.test(result.stderr),
