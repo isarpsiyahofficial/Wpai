@@ -227,6 +227,21 @@ async function ensureAuthSchema(token) {
     ['refresh_token_hash', 'TEXT'], ['expires_at', 'TEXT'], ['last_rotated_at', "TEXT NOT NULL DEFAULT ''"],
     ['revoked_at', 'TEXT'], ['created_at', "TEXT NOT NULL DEFAULT ''"]
   ]);
+
+  await ensureTable(token, 'audit_logs', `CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    actor_admin_id TEXT,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    request_id TEXT,
+    created_at TEXT NOT NULL
+  )`, [
+    ['id', 'TEXT'], ['actor_admin_id', 'TEXT'], ['action', 'TEXT'], ['target_type', 'TEXT'],
+    ['target_id', 'TEXT'], ['summary_json', "TEXT NOT NULL DEFAULT '{}'"], ['request_id', 'TEXT'],
+    ['created_at', "TEXT NOT NULL DEFAULT ''"]
+  ]);
 }
 
 async function ensureOwner(token) {
