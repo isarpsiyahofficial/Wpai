@@ -225,6 +225,9 @@ def validate_product_scope() -> None:
     for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "Bağlantıyı Kaldır"):
         if required not in app:
             raise AssertionError(f"Settings-only connection flow missing: {required}")
+    for forbidden in ("Yönetici e-postası<input", "Yeni parola<input", "Parola tekrarı<input", "Panele Giriş Yap"):
+        if forbidden in app:
+            raise AssertionError(f"Passwordless desktop onboarding regressed: {forbidden}")
     api = "\n".join((ROOT / path).read_text("utf-8") for path in (
         "src/worker/api.ts", "src/worker/extendedApi.ts", "src/worker/trainingApi.ts"
     ))
@@ -249,13 +252,16 @@ def validate_product_scope() -> None:
     settings = (ROOT / "src/frontend/pages/settings.tsx").read_text("utf-8")
     for label in (
         "Cloudflare Bağlantısı", "WhatsApp / Meta Bağlantısı", "Bağlantı Bilgisini Güncelle",
-        "Bağlantıyı Kaldır", "Bağlı", "Parola Değiştir"
+        "Bağlantıyı Kaldır", "Bağlı"
     ):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
-    for forbidden in ("Tam Sistem Taraması", "Eksikleri Kur ve Onar", "<label>Account ID<input"):
+    for forbidden in (
+        "Tam Sistem Taraması", "Eksikleri Kur ve Onar", "<label>Account ID<input",
+        "<h3>Parola Değiştir</h3>", "Mevcut parola<input", "Yeni parola tekrarı<input"
+    ):
         if forbidden in settings:
-            raise AssertionError(f"Technical connection control must not be exposed: {forbidden}")
+            raise AssertionError(f"Superseded or technical settings control must not be exposed: {forbidden}")
     pages_index = (ROOT / "src/frontend/pages/index.ts").read_text("utf-8")
     if "export { DashboardPage, ReportsPage } from './dashboardReports';" not in pages_index:
         raise AssertionError("Dashboard and reports must use the transparent Neuron views")
@@ -300,4 +306,4 @@ if __name__ == "__main__":
     validate_wrangler()
     validate_migrations()
     validate_product_scope()
-    print("Static validation passed: Settings-only persistent Cloudflare/Meta connection lifecycle and all existing product gates are consistent.")
+    print("Static validation passed: passwordless Settings-only Cloudflare/Meta connection lifecycle and all existing product gates are consistent.")
