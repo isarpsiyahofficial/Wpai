@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "WPAI [Recovery V5] - WhatsApp ve AI Yönetimi",
+        "title": "WPAI [Device Bootstrap V6] - WhatsApp ve AI Yönetimi",
         "width": 1440,
         "height": 920,
         "minWidth": 1100,
@@ -40,7 +40,7 @@
     "publisher": "WPAI",
     "category": "Business",
     "shortDescription": "WhatsApp müşteri görüşmeleri ve AI yönetimi",
-    "longDescription": "Cloudflare ilk kurulumunu, WhatsApp Business bağlantısını, müşteri görüşmelerini ve yapay zekâ yönetimini tek Windows uygulamasında güvenli biçimde yöneten WPAI istemcisi.",
+    "longDescription": "Cloudflare bağlantısını, WhatsApp Business görüşmelerini ve yapay zekâ yönetimini tek Windows uygulamasında güvenli cihaz oturumuyla yöneten WPAI istemcisi.",
     "externalBin": [
       "bin/faiss-service"
     ],
