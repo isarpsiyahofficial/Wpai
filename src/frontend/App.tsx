@@ -58,6 +58,7 @@ const DEFAULT_BRANDING: Branding = {
 
 export function App() {
   const desktopMode = isDesktop();
+  const browserLayoutTest = !desktopMode && import.meta.env.VITE_WPAI_E2E === '1';
   const [auth, setAuth] = useState<AuthState>({ phase: 'loading' });
   const [page, setPage] = useState<PageId>('dashboard');
   const [collapsed, setCollapsed] = useState(false);
@@ -83,6 +84,10 @@ export function App() {
   }, []);
 
   const boot = useCallback(async () => {
+    if (browserLayoutTest) {
+      setAuth({ phase: 'ready', admin: { id: 'e2e-admin', name: 'WPAI', email: 'layout@local.invalid', role: 'owner' } });
+      return;
+    }
     if (!desktopMode) {
       setAuth({ phase: 'unsupported' });
       return;
@@ -109,7 +114,7 @@ export function App() {
       openConnections(currentConnection);
       notify('Bu cihazın bulut oturumu yenilenmeli. Yalnız Cloudflare API tokenini yeniden doğrulayın; e-posta veya parola gerekmiyor.', 'info');
     }
-  }, [desktopMode, notify, openConnections]);
+  }, [browserLayoutTest, desktopMode, notify, openConnections]);
 
   useEffect(() => { void boot(); }, [boot]);
   useEffect(() => {
