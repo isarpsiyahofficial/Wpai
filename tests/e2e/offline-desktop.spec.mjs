@@ -10,12 +10,21 @@ function installDesktopMock(page, initiallyConnected) {
       invoke: async command => {
         const configured = localStorage.getItem('wpai-test-cloudflare') === 'connected';
         if (command === 'cloudflare_connection_status') {
-          return { configured, accountId: 'hidden-account-id', storage: 'Windows Credential Manager' };
+          return {
+            configured,
+            accountId: 'hidden-account-id',
+            storage: 'Windows Credential Manager',
+            mode: configured ? 'device_session' : 'none',
+            activationToken: null
+          };
         }
         if (command === 'cloudflare_forget') {
           localStorage.setItem('wpai-test-cloudflare', 'disconnected');
           return { forgotten: true, accountId: 'hidden-account-id' };
         }
+        if (command === 'remove_desktop_refresh_token') return null;
+        if (command === 'load_desktop_refresh_token') return null;
+        if (command === 'get_or_create_device_id') return 'device-1111111111111111111111111111111111111111';
         if (command === 'show_desktop_notification') return null;
         throw new Error(`Unexpected desktop command: ${command}`);
       },
@@ -27,35 +36,37 @@ function installDesktopMock(page, initiallyConnected) {
   }, { connected: initiallyConnected });
 }
 
-test('offline startup stays in Settings and keeps the saved Cloudflare connection', async ({ page }) => {
+test('offline startup stays in Settings and keeps the saved device connection', async ({ page }) => {
   await installDesktopMock(page, true);
   await page.route('**/api/**', route => route.abort('internetdisconnected'));
   await page.route('**/health', route => route.abort('internetdisconnected'));
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: 'Ayarlar' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Cloudflare Bağlantısı' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'WPAI Cihaz Bağlantısı' })).toBeVisible();
   await expect(page.getByText('İnternet bağlantısı yok', { exact: true })).toBeVisible();
-  await expect(page.getByText('Bağlı', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Hazır', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Güvenli cihaz oturumu', { exact: true })).toBeVisible();
   await expect(page.getByText('Yerel Bilgi Modu')).toHaveCount(0);
-  await expect(page.getByText('Yerel Eğitim İndeksi')).toHaveCount(0);
-  await expect(page.getByText('FAISS boyutu')).toHaveCount(0);
   await expect(page.getByText('Cloudflare Account ID')).toHaveCount(0);
+  await expect(page.getByText('Cloudflare User veya Account API Token')).toHaveCount(0);
+  await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
 });
 
-test('removing a saved connection keeps it removed after reopening the app', async ({ page }) => {
+test('removing a saved device connection keeps it removed after reopening the app', async ({ page }) => {
   await installDesktopMock(page, true);
   await page.route('**/api/**', route => route.abort('internetdisconnected'));
   await page.route('**/health', route => route.abort('internetdisconnected'));
   page.on('dialog', dialog => void dialog.accept());
   await page.goto('/');
 
-  await page.getByRole('button', { name: 'Bağlantıyı Kaldır' }).click();
+  await page.getByRole('button', { name: 'Bu Cihazın Bağlantısını Kaldır' }).click();
   await expect(page.getByText('Bağlantı yok', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Bağlantıyı Kur' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cihaz Bağlantısını Yeniden Dene' })).toBeVisible();
+  await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
 
   await page.reload();
   await expect(page.getByText('Bağlantı yok', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Bağlantıyı Kur' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cihaz Bağlantısını Yeniden Dene' })).toBeVisible();
   await expect(page.getByText('Yerel Bilgi Modu')).toHaveCount(0);
 });
