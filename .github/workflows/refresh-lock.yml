@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: wpai-refresh-lock-${{ github.ref }}
@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -33,6 +35,19 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify high severity audit gate
         run: npm audit --audit-level=high
+      - name: Commit audited lockfile when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package-lock.json; then
+            echo 'package-lock.json already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'Refresh audited package lock'
+          git push origin HEAD:agent/wpai-production-rebuild
       - name: Upload regenerated lockfile
         uses: actions/upload-artifact@v4
         with:
