@@ -28,6 +28,14 @@ export type CloudflareBootstrapResult = {
   report?: Record<string, unknown>;
 };
 
+export type DesktopConnectionStatus = {
+  configured: boolean;
+  accountId: string;
+  storage: string;
+  mode?: 'device_session' | 'installer_activation' | 'cloudflare_api' | 'none' | string;
+  activationToken?: string | null;
+};
+
 function available(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -93,8 +101,8 @@ export const desktop = {
   quit(): Promise<void> {
     return requiredInvoke<void>('quit_application');
   },
-  cloudflareConnectionStatus(): Promise<{ configured: boolean; accountId: string; storage: string }> {
-    return requiredInvoke('cloudflare_connection_status');
+  cloudflareConnectionStatus(): Promise<DesktopConnectionStatus> {
+    return requiredInvoke<DesktopConnectionStatus>('cloudflare_connection_status');
   },
   cloudflareScan(accountId: string, apiToken?: string): Promise<Record<string, unknown>> {
     return requiredInvoke('cloudflare_scan', { accountId, apiToken: apiToken || null });
