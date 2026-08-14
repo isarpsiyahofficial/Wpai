@@ -1,0 +1,140 @@
+name: WPAI Windows Wrangler OAuth Runtime
+
+on:
+  push:
+    branches: [main, agent/wpai-production-rebuild]
+    paths:
+      - 'desktop-bootstrap/**'
+      - 'src/frontend/**'
+      - 'src-tauri/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/windows-oauth-runtime.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wpai-windows-oauth-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oauth-runtime:
+    name: Build and verify credential-free Wrangler OAuth package
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: x86_64-pc-windows-msvc
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run Wrangler OAuth regression with stale provider-token environment present
+        shell: pwsh
+        run: |
+          $env:CLOUDFLARE_API_TOKEN = 'expired-token-must-not-win'
+          $env:CF_API_TOKEN = 'legacy-expired-token-must-not-win'
+          npm run test:oauth
+      - name: Build FAISS sidecar required by Tauri package
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sidecar/requirements.txt
+          python -m pytest -q sidecar/test_faiss_service.py
+          pyinstaller --noconfirm --clean --onefile --name faiss-service sidecar/faiss_service.py
+          New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
+          Copy-Item dist/faiss-service.exe src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe
+      - name: Compile native OAuth commands
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Prepare packaged Cloudflare runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bootstrap = Join-Path $PWD 'desktop-bootstrap'
+          $runtime = Join-Path $bootstrap 'runtime'
+          $project = Join-Path $bootstrap 'project'
+          Remove-Item $runtime, $project -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $runtime, $project | Out-Null
+          $nodeExe = (Get-Command node).Source
+          $nodeHome = Split-Path -Parent $nodeExe
+          Copy-Item $nodeExe (Join-Path $runtime 'node.exe')
+          New-Item -ItemType Directory -Force -Path (Join-Path $runtime 'node_modules') | Out-Null
+          Copy-Item (Join-Path $nodeHome 'node_modules\npm') (Join-Path $runtime 'node_modules\npm') -Recurse
+          $files = @('package.json','package-lock.json','wrangler.jsonc','index.html','vite.config.ts','tsconfig.base.json','tsconfig.frontend.json','tsconfig.worker.json','tsconfig.json')
+          foreach ($file in $files) { Copy-Item (Join-Path $PWD $file) (Join-Path $project $file) }
+          Copy-Item (Join-Path $PWD 'src') (Join-Path $project 'src') -Recurse
+          Copy-Item (Join-Path $PWD 'migrations') (Join-Path $project 'migrations') -Recurse
+          if (-not (Test-Path (Join-Path $bootstrap 'oauth-device-bootstrap.mjs'))) { throw 'OAuth bootstrap source missing' }
+          if (-not (Test-Path (Join-Path $runtime 'node.exe'))) { throw 'Packaged Node runtime missing' }
+          if (-not (Test-Path (Join-Path $runtime 'node_modules\npm\bin\npm-cli.js'))) { throw 'Packaged npm runtime missing' }
+      - name: Build generic NSIS installer without embedded Cloudflare API token
+        shell: pwsh
+        run: |
+          Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:CF_API_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:WPAI_DESKTOP_ACTIVATION_TOKEN -ErrorAction SilentlyContinue
+          npm run desktop:build
+      - name: Install package and verify OAuth resources plus absence of API-token input source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer missing' }
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw "NSIS install failed: $($install.ExitCode)" }
+          $registryPaths = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $entry = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'WPAI' } | Sort-Object InstallDate -Descending | Select-Object -First 1
+          if (-not $entry) { throw 'Installed WPAI registry entry missing' }
+          $installLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
+          if (-not $installLocation -or -not (Test-Path $installLocation)) { throw 'Installed WPAI location missing' }
+          $oauth = Get-ChildItem -Path $installLocation -Filter 'oauth-device-bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $node = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          $project = Get-ChildItem -Path $installLocation -Filter 'wrangler.jsonc' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          if (-not $oauth -or -not $node -or -not $project) { throw 'Installed Wrangler OAuth bootstrap resources incomplete' }
+          $appSource = Get-Content src/frontend/App.tsx -Raw
+          $settingsSource = Get-Content src/frontend/pages/settings.tsx -Raw
+          if ($appSource -match 'name="apiToken"' -or $settingsSource -match 'name="apiToken"') { throw 'Cloudflare API token input returned to product UI' }
+          if ($appSource -notmatch 'Cloudflare Oturumunu Aç') { throw 'Browser OAuth recovery control missing' }
+          $proof = [ordered]@{
+            installer = $installer.Name
+            installerSha256 = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+            oauthBootstrapInstalled = $true
+            packagedNodeInstalled = $true
+            packagedWranglerProjectInstalled = $true
+            cloudflareApiTokenInputCount = 0
+            browserOauthRecoveryPresent = $true
+          }
+          $proof | ConvertTo-Json | Set-Content -Encoding utf8 windows-oauth-runtime-proof.json
+          $uninstallText = [string]$entry.UninstallString
+          $uninstall = if ($uninstallText -match '^"([^"]+\.exe)"') { $Matches[1] } elseif ($uninstallText -match '^([^\s]+\.exe)') { $Matches[1] } else { $null }
+          if ($uninstall -and (Test-Path $uninstall)) { Start-Process -FilePath $uninstall -ArgumentList '/S' -Wait }
+      - name: Upload OAuth package proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: WPAI-Windows-OAuth-Runtime-${{ github.sha }}
+          path: windows-oauth-runtime-proof.json
+          if-no-files-found: error
+          retention-days: 30
