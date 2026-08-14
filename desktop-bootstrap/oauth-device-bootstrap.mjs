@@ -16,6 +16,14 @@ const SKIP_NPM = process.env.WPAI_BOOTSTRAP_SKIP_NPM === '1';
 const COMMAND_TIMEOUT = Math.max(10_000, Number(process.env.WPAI_BOOTSTRAP_COMMAND_TIMEOUT_MS || 20 * 60_000));
 const REQUEST_TIMEOUT = Math.max(2_000, Number(process.env.WPAI_BOOTSTRAP_REQUEST_TIMEOUT_MS || 30_000));
 const VERSION = 'wrangler-oauth-device-v1';
+const PROVIDER_TOKEN_ENV = [
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_API_KEY',
+  'CLOUDFLARE_EMAIL',
+  'CF_API_TOKEN',
+  'CF_API_KEY',
+  'CF_EMAIL'
+];
 
 function emit(body, code = 0) {
   process.stdout.write(`${JSON.stringify(body)}\n`);
@@ -31,10 +39,18 @@ function fail(code, message, details) {
   throw new Error(`[${code}] ${message}${suffix}`);
 }
 
-function run(command, args, cwd = PROJECT, env = {}) {
+function childEnvironment(extra = {}, oauthOnly = false) {
+  const result = { ...process.env, ...extra };
+  if (oauthOnly) {
+    for (const key of PROVIDER_TOKEN_ENV) delete result[key];
+  }
+  return result;
+}
+
+function run(command, args, cwd = PROJECT, env = {}, oauthOnly = false) {
   const result = spawnSync(command, args, {
     cwd,
-    env: { ...process.env, ...env },
+    env: childEnvironment(env, oauthOnly),
     encoding: 'utf8',
     windowsHide: true,
     timeout: COMMAND_TIMEOUT,
@@ -66,7 +82,7 @@ function wranglerPath() {
 function wrangler(args) {
   const bin = wranglerPath();
   requireFile(bin, 'WRANGLER_MISSING', 'Wrangler');
-  return run(RUNTIME_NODE, [bin, ...args]);
+  return run(RUNTIME_NODE, [bin, ...args], PROJECT, {}, true);
 }
 
 function ensureDependencies() {
