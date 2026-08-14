@@ -36,10 +36,18 @@ function apiUrl(path: string): string {
 }
 
 function applyDesktopSession(session: DesktopSession): void {
-  if (!session.accessToken || !session.accessExpiresAt) throw new Error('Masaüstü oturum cevabı geçersiz.');
+  if (!session.accessToken || !session.accessExpiresAt || !session.refreshToken || !session.admin?.id) {
+    throw new Error('Masaüstü oturum cevabı geçersiz.');
+  }
   desktopAccessToken = session.accessToken;
   desktopAccessExpiresAt = Date.parse(session.accessExpiresAt);
   if (!Number.isFinite(desktopAccessExpiresAt)) throw new Error('Masaüstü oturum süresi geçersiz.');
+}
+
+async function persistDesktopSession(session: DesktopSession): Promise<DesktopSession> {
+  applyDesktopSession(session);
+  await desktop.saveRefreshToken(session.refreshToken);
+  return session;
 }
 
 function clearDesktopMemory(): void {
@@ -75,16 +83,36 @@ async function activateInstallerSession(deviceId: string): Promise<DesktopSessio
   if (!navigator.onLine) throw new Error('İnternet bağlantısı yok. Cihaz oturumu oluşturulamıyor.');
   const connection = await desktop.cloudflareConnectionStatus() as DesktopConnectionBootstrap;
   const activationToken = connection.activationToken?.trim();
-  if (!activationToken) throw new Error('Bu kurulum için otomatik cihaz etkinleştirmesi bulunamadı.');
+  if (!activationToken) throw new Error('INSTALLER_ACTIVATION_MISSING');
   const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/activate', {
     activationToken,
     deviceId,
     deviceName: navigator.userAgent.includes('Windows') ? 'WPAI Windows' : 'WPAI Desktop',
     appVersion: '1.3.6'
   });
-  await desktop.saveRefreshToken(session.refreshToken);
-  applyDesktopSession(session);
-  return session;
+  return persistDesktopSession(session);
+}
+
+async function bootstrapViaWranglerOAuth(deviceId: string): Promise<DesktopSession> {
+  if (!navigator.onLine) throw new Error('İnternet bağlantısı yok. Cihaz oturumu oluşturulamıyor.');
+  const result = await desktop.cloudflareAutoBootstrap(deviceId);
+  const session = result.session as DesktopSession | undefined;
+  if (!session) throw new Error('Wrangler OAuth bağlantısı tamamlandı ancak cihaz oturumu oluşturulamadı.');
+  return persistDesktopSession(session);
+}
+
+async function bootstrapNewDesktopSession(deviceId: string): Promise<DesktopSession> {
+  try {
+    return await activateInstallerSession(deviceId);
+  } catch (activationError) {
+    try {
+      return await bootstrapViaWranglerOAuth(deviceId);
+    } catch (oauthError) {
+      if (oauthError instanceof Error && oauthError.message.trim()) throw oauthError;
+      if (activationError instanceof Error && activationError.message !== 'INSTALLER_ACTIVATION_MISSING') throw activationError;
+      throw new Error('Otomatik cihaz bağlantısı kurulamadı.');
+    }
+  }
 }
 
 export async function activateDesktopBootstrapSession(refreshToken: string): Promise<DesktopSession> {
@@ -101,23 +129,23 @@ export async function restoreDesktopSession(): Promise<DesktopSession> {
   refreshPromise = (async () => {
     const deviceId = await desktop.getOrCreateDeviceId();
     const refreshToken = await desktop.loadRefreshToken();
-    if (!refreshToken) return activateInstallerSession(deviceId);
+    if (!refreshToken) return bootstrapNewDesktopSession(deviceId);
     try {
       const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/refresh', { refreshToken, deviceId });
-      await desktop.saveRefreshToken(session.refreshToken);
-      applyDesktopSession(session);
-      return session;
-    } catch (refreshError) {
+      return await persistDesktopSession(session);
+    } catch {
       clearDesktopMemory();
       await desktop.removeRefreshToken().catch(() => undefined);
-      try {
-        return await activateInstallerSession(deviceId);
-      } catch {
-        throw refreshError;
-      }
+      return bootstrapNewDesktopSession(deviceId);
     }
   })().finally(() => { refreshPromise = null; });
   return refreshPromise;
+}
+
+export async function openCloudflareBrowserLogin(): Promise<void> {
+  if (!desktop.available()) throw new Error('Cloudflare tarayıcı oturumu yalnız WPAI Windows uygulamasında kullanılabilir.');
+  if (!navigator.onLine) throw new Error('İnternet bağlantısı yok. Cloudflare oturumu açılamıyor.');
+  await desktop.cloudflareOauthLogin();
 }
 
 export async function desktopLogout(): Promise<void> {
