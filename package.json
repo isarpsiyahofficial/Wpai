@@ -15,7 +15,7 @@
     "types": "wrangler types worker-configuration.d.ts --experimental-provision=false --experimental-auto-create=false",
     "typecheck": "npm run types && tsc -p tsconfig.frontend.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "npm run test:unit && npm run test:worker",
-    "test:unit": "vitest run --config vitest.node.config.ts && node --test desktop-bootstrap/bootstrap.test.mjs desktop-bootstrap/bootstrap-wrapper.test.mjs desktop-bootstrap/bootstrap-v6.test.mjs",
+    "test:unit": "vitest run --config vitest.node.config.ts && node --test desktop-bootstrap/bootstrap.test.mjs desktop-bootstrap/bootstrap-wrapper.test.mjs desktop-bootstrap/bootstrap-v6.test.mjs desktop-bootstrap/oauth-device-bootstrap.test.mjs",
     "test:worker": "vitest run --config vitest.worker.config.ts",
     "security:scan": "node scripts/scan-secrets.mjs",
     "validate": "python scripts/sync_brand.py && python scripts/validate.py && python scripts/validate_spec500.py",
