@@ -61,12 +61,15 @@ test('removing a saved device connection keeps it removed after reopening the ap
   await page.goto('/');
 
   await page.getByRole('button', { name: 'Bu Cihazın Bağlantısını Kaldır' }).click();
-  await expect(page.getByText('Bağlantı yok', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Bağlantı bekleniyor', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Otomatik bağlantı hazırlanıyor', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cihaz Bağlantısını Yeniden Dene' })).toBeVisible();
   await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
 
   await page.reload();
-  await expect(page.getByText('Bağlantı yok', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Bağlantı bekleniyor', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Otomatik bağlantı hazırlanıyor', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cihaz Bağlantısını Yeniden Dene' })).toBeVisible();
   await expect(page.getByText('Yerel Bilgi Modu')).toHaveCount(0);
+  await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
 });
