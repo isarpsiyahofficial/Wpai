@@ -50,6 +50,7 @@ export async function resetBusinessData(): Promise<void> {
     'admin_ai_threads',
     'desktop_sessions',
     'desktop_devices',
+    'desktop_activation_tokens',
     'csv_import_rows',
     'csv_imports',
     'dead_letter_jobs',
