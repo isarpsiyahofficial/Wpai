@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=WPAI_DESKTOP_ACTIVATION_TOKEN");
+
     const COMMANDS: &[&str] = &[
         "save_cloudflare_token",
         "load_cloudflare_token",
