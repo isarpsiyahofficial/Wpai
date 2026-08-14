@@ -1,11 +1,9 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  activateDesktopBootstrapSession,
   api,
   apiObjectUrl,
   desktopLogout,
   downloadApiFile,
-  formValue,
   isDesktop,
   publicRawJson,
   restoreDesktopSession
@@ -27,11 +25,14 @@ const NAV: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'settings', label: 'Ayarlar', icon: '⚙' }
 ];
 
-const CLOUDFLARE_ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
-
 type AuthState = { phase: 'loading' | 'connections' | 'ready' | 'unsupported'; admin?: Admin };
 type Toast = { message: string; kind: 'success' | 'error' | 'info' } | null;
-type CloudflareConnection = { configured: boolean; accountId: string; storage: string };
+type CloudflareConnection = {
+  configured: boolean;
+  accountId: string;
+  storage: string;
+  mode?: 'device_session' | 'installer_activation' | 'cloudflare_api' | 'none' | string;
+};
 type Branding = {
   app_name: string;
   company_name: string;
@@ -43,8 +44,9 @@ type Branding = {
 
 const DEFAULT_CONNECTION: CloudflareConnection = {
   configured: false,
-  accountId: CLOUDFLARE_ACCOUNT_ID,
-  storage: 'Windows Credential Manager'
+  accountId: '',
+  storage: 'Windows Credential Manager',
+  mode: 'none'
 };
 
 const DEFAULT_BRANDING: Branding = {
@@ -71,7 +73,7 @@ export function App() {
 
   const notify: Notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
-    window.setTimeout(() => setToast(null), 4500);
+    window.setTimeout(() => setToast(null), 6000);
     if (desktopMode && document.hidden) {
       void desktop.notify(kind === 'error' ? 'WPAI uyarısı' : 'WPAI bildirimi', message).catch(() => undefined);
     }
@@ -97,22 +99,30 @@ export function App() {
     try {
       currentConnection = await desktop.cloudflareConnectionStatus();
       setCloudflareConnection(currentConnection);
-    } catch {
+    } catch (error) {
       openConnections(DEFAULT_CONNECTION);
+      notify(error instanceof Error ? error.message : 'Cihaz bağlantı durumu okunamadı.', 'error');
       return;
     }
 
-    if (!currentConnection.configured || !navigator.onLine) {
+    if (!navigator.onLine) {
       openConnections(currentConnection);
       return;
     }
 
     try {
       const session = await restoreDesktopSession();
+      const refreshed = await desktop.cloudflareConnectionStatus().catch(() => currentConnection);
+      setCloudflareConnection(refreshed);
       setAuth({ phase: 'ready', admin: session.admin });
-    } catch {
+    } catch (error) {
       openConnections(currentConnection);
-      notify('Bu cihazın bulut oturumu yenilenmeli. Yalnız Cloudflare API tokenini yeniden doğrulayın; e-posta veya parola gerekmiyor.', 'info');
+      notify(
+        error instanceof Error
+          ? `Otomatik cihaz bağlantısı kurulamadı: ${error.message}`
+          : 'Otomatik cihaz bağlantısı kurulamadı.',
+        'error'
+      );
     }
   }, [browserLayoutTest, desktopMode, notify, openConnections]);
 
@@ -133,6 +143,7 @@ export function App() {
       window.removeEventListener('offline', becameOffline);
     };
   }, [boot, desktopMode, openConnections]);
+
   useEffect(() => {
     if (auth.phase !== 'ready') return;
     let disposed = false;
@@ -182,8 +193,8 @@ export function App() {
   }, [auth.phase, desktopMode, notify]);
 
   const authToast = toast && <div className={`toast ${toast.kind}`} role="status" aria-live="assertive">{toast.message}</div>;
-  if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>Güvenli panel hazırlanıyor…</p></Centered>{authToast}</>;
-  if (auth.phase === 'unsupported') return <><Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>WPAI Masaüstü Uygulaması</h1><p>Bu yönetim paneli cihaz oturumu ile çalışır. E-posta veya parola girişi kullanılmaz.</p></section></Centered>{authToast}</>;
+  if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>WPAI cihaz bağlantısı hazırlanıyor…</p></Centered>{authToast}</>;
+  if (auth.phase === 'unsupported') return <><Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>WPAI Masaüstü Uygulaması</h1><p>Bu yönetim paneli güvenli cihaz oturumu ile çalışır. Kullanıcı adı, e-posta veya parola girişi kullanılmaz.</p></section></Centered>{authToast}</>;
   if (auth.phase === 'connections') return <><DesktopConnectionsPage
     connection={cloudflareConnection}
     online={online}
@@ -204,7 +215,7 @@ export function App() {
     </aside>
     <main className="main">
       <header className="topbar">
-        <div><h1>{NAV.find(item => item.id === page)?.label}</h1><p>{branding.company_name || 'Tek işletme'} · Kesin müşteri ayrımı · {desktopMode ? 'Windows uygulaması' : 'Güvenli Cloudflare altyapısı'}</p></div>
+        <div><h1>{NAV.find(item => item.id === page)?.label}</h1><p>{branding.company_name || 'Tek işletme'} · Kesin müşteri ayrımı · Windows cihaz oturumu</p></div>
         <div className="top-actions"><span className={`pill ${health?.ok ? 'ready' : 'warn'}`}>{health?.ok ? 'Bağlı' : 'Bağlantı kontrol ediliyor'}</span><span className="admin-name">{auth.admin?.name}</span><button className="button ghost" onClick={() => openConnections(cloudflareConnection)}>Bağlantılar</button></div>
       </header>
       <section className="content">
@@ -242,7 +253,6 @@ function DesktopConnectionsPage({
   onReady: (admin: Admin) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [showUpdate, setShowUpdate] = useState(connection.configured);
 
   async function refreshConnection() {
     const value = await desktop.cloudflareConnectionStatus();
@@ -250,85 +260,47 @@ function DesktopConnectionsPage({
     return value;
   }
 
-  async function verifyConnection() {
+  async function retryAutomaticConnection() {
     if (!online) {
-      notify('İnternet bağlantısı yok. Kayıtlı bağlantı korunuyor.', 'info');
+      notify('İnternet bağlantısı yok. Cihaz kaydı korunuyor.', 'info');
       return;
     }
     setBusy(true);
     try {
-      await desktop.cloudflareScan(CLOUDFLARE_ACCOUNT_ID);
+      const session = await restoreDesktopSession();
       await refreshConnection();
-      notify('Cloudflare bağlantısı doğrulandı.', 'success');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı doğrulanamadı.', 'error');
-    } finally { setBusy(false); }
-  }
-
-  async function connectWithToken(token: string) {
-    const deviceId = await desktop.getOrCreateDeviceId();
-    const result = await desktop.cloudflareSetup({
-      accountId: CLOUDFLARE_ACCOUNT_ID,
-      apiToken: token,
-      deviceId
-    });
-    const refreshToken = result.session?.refreshToken;
-    if (!refreshToken) throw new Error('Cloudflare bağlantısı kuruldu ancak cihaz oturumu oluşturulamadı [device-bootstrap-v6].');
-    const session = await activateDesktopBootstrapSession(refreshToken);
-    await refreshConnection();
-    return session;
-  }
-
-  async function updateConnection(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!online) {
-      notify('İnternet bağlantısı olmadan bağlantı bilgisi güncellenemez.', 'error');
-      return;
-    }
-    setBusy(true);
-    try {
-      const session = await connectWithToken(formValue(form, 'apiToken'));
-      form.reset();
-      setShowUpdate(false);
-      notify('Cloudflare bağlantısı ve bu cihazın güvenli oturumu yenilendi.', 'success');
+      notify('Cihaz bağlantısı hazır.', 'success');
       onReady(session.admin);
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı güncellenemedi.', 'error');
-    } finally { setBusy(false); }
-  }
-
-  async function setupConnection(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!online) {
-      notify('İnternet bağlantısı olmadan yeni bağlantı kurulamaz.', 'error');
-      return;
+      notify(error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.', 'error');
+    } finally {
+      setBusy(false);
     }
-    const form = event.currentTarget;
-    setBusy(true);
-    try {
-      const session = await connectWithToken(formValue(form, 'apiToken'));
-      notify('Cloudflare bağlantısı kuruldu. E-posta veya parola gerekmiyor.', 'success');
-      onReady(session.admin);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kurulamadı.', 'error');
-    } finally { setBusy(false); }
   }
 
   async function removeConnection() {
-    if (!window.confirm('Bu bilgisayardaki Cloudflare bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
+    if (!window.confirm('Bu bilgisayardaki cihaz bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
     setBusy(true);
     try {
       await desktopLogout().catch(() => undefined);
       await desktop.cloudflareForget();
       const value = await refreshConnection();
-      setShowUpdate(false);
-      notify('Cloudflare bağlantısı bu bilgisayardan kaldırıldı. Buluttaki veriler korunuyor.', 'success');
+      notify('Bu bilgisayarın cihaz bağlantısı kaldırıldı. Buluttaki veriler korunuyor.', 'success');
       onConnectionChange(value);
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kaldırılamadı.', 'error');
-    } finally { setBusy(false); }
+      notify(error instanceof Error ? error.message : 'Cihaz bağlantısı kaldırılamadı.', 'error');
+    } finally {
+      setBusy(false);
+    }
   }
+
+  const modeText = connection.mode === 'device_session'
+    ? 'Güvenli cihaz oturumu'
+    : connection.mode === 'installer_activation'
+      ? 'Kurulum etkinleştirmesi hazır'
+      : connection.configured
+        ? 'Cihaz bağlantısı hazır'
+        : 'Etkinleştirme bulunamadı';
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -337,39 +309,27 @@ function DesktopConnectionsPage({
     </aside>
     <main className="main">
       <header className="topbar">
-        <div><h1>Ayarlar</h1><p>Bağlantılar</p></div>
-        <div className="top-actions"><span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Bağlı' : 'Bağlantı yok'}</span></div>
+        <div><h1>Ayarlar</h1><p>Cihaz bağlantısı</p></div>
+        <div className="top-actions"><span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı yok'}</span></div>
       </header>
       <section className="content">
         <div className="page-stack">
-          {!online && <section className="panel"><div className="panel-heading"><div><h3>İnternet bağlantısı yok</h3><p>Kayıtlı bağlantı silinmedi. İnternet geldiğinde yeniden doğrulayabilirsiniz.</p></div><span className="pill warn">Çevrimdışı</span></div></section>}
+          {!online && <section className="panel"><div className="panel-heading"><div><h3>İnternet bağlantısı yok</h3><p>Kayıtlı cihaz bağlantısı silinmedi. İnternet geldiğinde otomatik olarak yeniden denenecek.</p></div><span className="pill warn">Çevrimdışı</span></div></section>}
           <section className="panel">
             <div className="panel-heading">
-              <div><h3>Cloudflare Bağlantısı</h3><p>Yalnız Cloudflare API tokeni kullanılır. Yönetici e-postası, kullanıcı adı veya parola istenmez.</p></div>
-              <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Bağlı' : 'Bağlantı yok'}</span>
+              <div><h3>WPAI Cihaz Bağlantısı</h3><p>Bu uygulama kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden kendi güvenli cihaz oturumunu açar.</p></div>
+              <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı yok'}</span>
             </div>
-
-            {connection.configured ? <>
-              <div className="summary-grid">
-                <div><span>Durum</span><strong>Bağlı</strong></div>
-                <div><span>Kayıt</span><strong>Bu bilgisayarda güvenle saklanıyor</strong></div>
-                <div><span>İnternet</span><strong>{online ? 'Kullanılabilir' : 'Bağlantı bekleniyor'}</strong></div>
-              </div>
-              <div className="form-actions">
-                <button type="button" className="button secondary" disabled={busy || !online} onClick={() => void verifyConnection()}>{busy ? 'Doğrulanıyor…' : 'Bağlantıyı Doğrula'}</button>
-                <button type="button" className="button secondary" disabled={busy} onClick={() => setShowUpdate(value => !value)}>{showUpdate ? 'Token Alanını Kapat' : 'Cihaz Oturumunu Yenile'}</button>
-                <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bağlantıyı Kaldır</button>
-              </div>
-              {showUpdate && <form className="form-stack" onSubmit={updateConnection}>
-                <label>Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
-                <p className="safe-note">Bu işlem yalnız tokeni doğrular ve bu cihaz için yeni güvenli oturum üretir. E-posta ve parola kullanılmaz.</p>
-                <div className="form-actions"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlanıyor…' : 'Doğrula ve Panele Aç'}</button></div>
-              </form>}
-            </> : <form className="form-grid" onSubmit={setupConnection}>
-              <label className="wide">Cloudflare User veya Account API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" /></label>
-              <p className="safe-note wide">Token ID veya Global API Key kullanmayın. Bağlantı doğrulandığında token Windows Credential Manager'da, cihaz oturumu ise ayrı güvenli kayıtta saklanır. Yönetici e-postası veya parola oluşturmanız gerekmez.</p>
-              <div className="form-actions wide"><button className="button primary" disabled={busy || !online}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur ve Panele Aç'}</button></div>
-            </form>}
+            <div className="summary-grid">
+              <div><span>Durum</span><strong>{modeText}</strong></div>
+              <div><span>Kimlik doğrulama</span><strong>Cihaza bağlı</strong></div>
+              <div><span>İnternet</span><strong>{online ? 'Kullanılabilir' : 'Bağlantı bekleniyor'}</strong></div>
+            </div>
+            {!connection.configured && <p className="safe-note">Bu kurulum paketinde geçerli otomatik etkinleştirme bulunamadıysa kullanıcıdan gizli anahtar istenmez; doğrulanmış yeni kurulum paketi gerekir.</p>}
+            <div className="form-actions">
+              <button type="button" className="button primary" disabled={busy || !online} onClick={() => void retryAutomaticConnection()}>{busy ? 'Bağlanıyor…' : 'Cihaz Bağlantısını Yeniden Dene'}</button>
+              {connection.configured && <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bu Cihazın Bağlantısını Kaldır</button>}
+            </div>
           </section>
         </div>
       </section>
