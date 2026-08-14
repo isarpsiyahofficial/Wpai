@@ -21,6 +21,7 @@ def validate_files() -> None:
     required = [
         "package.json", "package-lock.json", "wrangler.jsonc", "index.html", "rust-toolchain.toml", ".dev.vars.example",
         "brand/product-brand.json", "scripts/sync_brand.py", "docs/SPEC-500-EVIDENCE.json",
+        "desktop-bootstrap/oauth-device-bootstrap.mjs", "desktop-bootstrap/oauth-device-bootstrap.test.mjs",
         "docs/WINDOWS-KURULUM-KALDIRMA.md", "docs/AI-EGITIM-MERKEZI-KILAVUZU.md", "docs/TEST-RAPORU.md",
         ".github/workflows/ci.yml", ".github/workflows/windows-desktop.yml",
         ".github/workflows/deploy-production.yml", ".github/workflows/e2e-live-scenarios.yml",
@@ -31,6 +32,7 @@ def validate_files() -> None:
         "src/frontend/pages/knowledgeAi.tsx", "src/frontend/pages/aiPage.tsx",
         "src/frontend/pages/dashboardReports.tsx", "src/frontend/pages/index.ts",
         "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs",
+        "src-tauri/src/oauth_bootstrap.rs",
         "src-tauri/windows/installer-hooks.nsh",
         "sidecar/faiss_service.py", "sidecar/requirements.txt", "sidecar/test_faiss_service.py",
         "migrations/0001_initial.sql", "migrations/0002_indexes.sql", "migrations/0003_default_settings.sql",
@@ -224,7 +226,7 @@ def validate_product_scope() -> None:
     for forbidden in ("Yerel Bilgi Modu", "OfflineDesktopPage", "phase: 'offline'", "Cloudflare Kurulumu ve Onarımı"):
         if forbidden in app:
             raise AssertionError(f"Superseded desktop connection flow returned: {forbidden}")
-    for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "restoreDesktopSession", "Cihaz Bağlantısını Yeniden Dene"):
+    for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "restoreDesktopSession", "openCloudflareBrowserLogin", "Cloudflare Oturumunu Aç", "Cihaz Bağlantısını Yeniden Dene"):
         if required not in app:
             raise AssertionError(f"Settings-only connection flow missing: {required}")
     for forbidden in ("Yönetici e-postası<input", "Yeni parola<input", "Parola tekrarı<input", "Panele Giriş Yap", "name=\"apiToken\"", "Cloudflare User veya Account API Token"):
