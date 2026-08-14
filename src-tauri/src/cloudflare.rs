@@ -10,7 +10,10 @@ use tauri::{AppHandle, Manager};
 const ACCOUNT_ID: &str = "ad8e99c82c6c17d823f6877ff1efade4";
 const KEYRING_SERVICE: &str = "WPAI Cloudflare Connection";
 const KEYRING_USER: &str = "ad8e99c82c6c17d823f6877ff1efade4";
+const SESSION_KEYRING_SERVICE: &str = "WPAI Desktop Session";
+const SESSION_KEYRING_USER: &str = "refresh-token";
 const MAX_ENGINE_OUTPUT: usize = 2_000_000;
+const BUILD_ACTIVATION_TOKEN: Option<&str> = option_env!("WPAI_DESKTOP_ACTIVATION_TOKEN");
 
 fn validate_account_id(value: &str) -> Result<(), String> {
     if value != ACCOUNT_ID {
@@ -33,9 +36,68 @@ fn validate_device_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn activation_token() -> Option<&'static str> {
+    let value = BUILD_ACTIVATION_TOKEN?.trim();
+    if (40..=500).contains(&value.len()) && !value.chars().any(char::is_whitespace) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn activation_marker_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "WPAI veri klasörü bulunamadı.".to_string())?
+        .join("device-activation-disabled"))
+}
+
+fn activation_disabled(app: &AppHandle) -> bool {
+    let Some(token) = activation_token() else { return false; };
+    let Ok(path) = activation_marker_path(app) else { return false; };
+    fs::read_to_string(path)
+        .map(|value| value.trim() == token)
+        .unwrap_or(false)
+}
+
+fn set_activation_disabled(app: &AppHandle, disabled: bool) -> Result<(), String> {
+    let path = activation_marker_path(app)?;
+    if disabled {
+        let Some(token) = activation_token() else { return Ok(()); };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|_| "WPAI veri klasörü oluşturulamadı.".to_string())?;
+        }
+        fs::write(path, token.as_bytes()).map_err(|_| "Cihaz etkinleştirme tercihi kaydedilemedi.".to_string())?;
+    } else if path.exists() {
+        fs::remove_file(path).map_err(|_| "Cihaz etkinleştirme tercihi temizlenemedi.".to_string())?;
+    }
+    Ok(())
+}
+
 fn credential_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|_| "Windows Credential Manager açılamadı.".to_string())
+}
+
+fn desktop_session_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SESSION_KEYRING_SERVICE, SESSION_KEYRING_USER)
+        .map_err(|_| "Windows Credential Manager açılamadı.".to_string())
+}
+
+fn has_desktop_session() -> Result<bool, String> {
+    match desktop_session_entry()?.get_password() {
+        Ok(value) => Ok((32..=1000).contains(&value.len()) && !value.chars().any(char::is_whitespace)),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(_) => Err("Kayıtlı cihaz oturumu okunamadı.".to_string()),
+    }
+}
+
+fn remove_desktop_session() -> Result<(), String> {
+    match desktop_session_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Kayıtlı cihaz oturumu kaldırılamadı.".to_string()),
+    }
 }
 
 fn load_api_token() -> Result<Option<String>, String> {
@@ -238,21 +300,45 @@ fn run_engine(
 }
 
 #[tauri::command]
-pub fn cloudflare_connection_status() -> Result<Value, String> {
+pub fn cloudflare_connection_status(app: AppHandle) -> Result<Value, String> {
+    let api_configured = load_api_token()?.is_some();
+    let session_configured = has_desktop_session()?;
+    let installer_activation = !activation_disabled(&app) && activation_token().is_some();
+    let mode = if session_configured {
+        "device_session"
+    } else if api_configured {
+        "cloudflare_api"
+    } else if installer_activation {
+        "installer_activation"
+    } else {
+        "none"
+    };
     Ok(json!({
-        "configured": load_api_token()?.is_some(),
+        "configured": api_configured || session_configured || installer_activation,
         "accountId": ACCOUNT_ID,
-        "storage": "Windows Credential Manager"
+        "storage": "Windows Credential Manager",
+        "mode": mode,
+        "activationToken": if installer_activation { activation_token() } else { None }
     }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn cloudflare_scan(app: AppHandle, account_id: String, api_token: Option<String>) -> Result<Value, String> {
     validate_account_id(&account_id)?;
+    if api_token.is_none() && load_api_token()?.is_none() && (has_desktop_session()? || (!activation_disabled(&app) && activation_token().is_some())) {
+        return Ok(json!({
+            "ok": true,
+            "mode": "device_session",
+            "accountId": ACCOUNT_ID,
+            "worker": "https://wa-ai-panel.wa-ai-panel.workers.dev",
+            "message": "Cihaz oturumu etkin; Cloudflare API tokeni gerekmiyor."
+        }));
+    }
     let (token, supplied) = resolve_token(api_token)?;
     let result = run_engine(&app, json!({ "action": "scan", "accountId": account_id }), &token, false)?;
     if supplied {
         save_api_token(&token)?;
+        set_activation_disabled(&app, false)?;
     }
     Ok(result)
 }
@@ -277,6 +363,7 @@ pub fn cloudflare_repair(
     )?;
     if supplied {
         save_api_token(&token)?;
+        set_activation_disabled(&app, false)?;
     }
     Ok(result)
 }
@@ -307,18 +394,21 @@ pub fn cloudflare_setup(
         true,
     )?;
     save_api_token(&token)?;
+    set_activation_disabled(&app, false)?;
     Ok(result)
 }
 
 #[tauri::command]
-pub fn cloudflare_forget() -> Result<Value, String> {
+pub fn cloudflare_forget(app: AppHandle) -> Result<Value, String> {
     remove_api_token()?;
+    remove_desktop_session()?;
+    set_activation_disabled(&app, true)?;
     Ok(json!({ "forgotten": true, "accountId": ACCOUNT_ID }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_engine, node_compatible_path, validate_account_id, validate_api_token, validate_device_id, ACCOUNT_ID};
+    use super::{activation_token, execute_engine, node_compatible_path, validate_account_id, validate_api_token, validate_device_id, ACCOUNT_ID};
     use serde_json::json;
     use std::{path::PathBuf, process::Command};
 
@@ -340,6 +430,14 @@ mod tests {
         assert!(validate_device_id(&format!("device-{}", "a".repeat(40))).is_ok());
         assert!(validate_device_id("short").is_err());
         assert!(validate_device_id(&format!("{} ", "a".repeat(40))).is_err());
+    }
+
+    #[test]
+    fn optional_installer_activation_token_is_never_required_for_source_tests() {
+        if let Some(value) = activation_token() {
+            assert!(value.len() >= 40);
+            assert!(!value.chars().any(char::is_whitespace));
+        }
     }
 
     #[cfg(target_os = "windows")]
