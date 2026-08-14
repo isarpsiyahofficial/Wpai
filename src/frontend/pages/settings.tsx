@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { api, apiObjectUrl, formValue, jsonBody, publicRawJson } from '../api';
+import { api, apiObjectUrl, desktopLogout, formValue, jsonBody, publicRawJson, restoreDesktopSession } from '../api';
 import { desktop } from '../desktop';
 import type { Health, Notify } from '../types';
 import { Empty, formatDate } from './core';
@@ -14,6 +14,7 @@ interface CloudflareConnection {
   configured: boolean;
   accountId: string;
   storage: string;
+  mode?: string;
 }
 interface Branding {
   app_name: string;
@@ -38,7 +39,6 @@ interface DeadLetter {
 }
 interface AppSettings { aiModel?: string; embeddingModel?: string; timezone?: string }
 
-const ACCOUNT_ID = 'ad8e99c82c6c17d823f6877ff1efade4';
 const PRODUCTION_ORIGIN = 'https://wa-ai-panel.wa-ai-panel.workers.dev';
 
 export function SettingsPage({
@@ -58,8 +58,6 @@ export function SettingsPage({
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [replies, setReplies] = useState<CannedReply[]>([]);
   const [deadLetters, setDeadLetters] = useState<DeadLetter[]>([]);
-  const [token, setToken] = useState('');
-  const [showCloudflareUpdate, setShowCloudflareUpdate] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [deepHealth, setDeepHealth] = useState<Health | null>(null);
   const [busy, setBusy] = useState(false);
@@ -86,7 +84,7 @@ export function SettingsPage({
       setCloudflare(await desktop.cloudflareConnectionStatus());
     } catch (error) {
       setCloudflare(null);
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantı durumu okunamadı.', 'error');
+      notify(error instanceof Error ? error.message : 'Cihaz bağlantı durumu okunamadı.', 'error');
     }
   }, [isDesktop, notify]);
 
@@ -115,48 +113,29 @@ export function SettingsPage({
     };
   }, [branding?.logo_key, isDesktop]);
 
-  async function saveCloudflareConnection(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!isDesktop) return;
-    const apiToken = formValue(form, 'apiToken');
-    setBusy(true);
-    try {
-      await desktop.cloudflareScan(ACCOUNT_ID, apiToken);
-      form.reset();
-      setToken('');
-      setShowCloudflareUpdate(false);
-      await refreshCloudflareConnection();
-      notify('Cloudflare bağlantısı doğrulandı ve bu bilgisayarda güvenli biçimde kaydedildi.', 'success');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kurulamadı.', 'error');
-    } finally { setBusy(false); }
-  }
-
   async function verifyCloudflareConnection() {
     if (!isDesktop) return;
     setBusy(true);
     try {
-      await desktop.cloudflareScan(ACCOUNT_ID);
+      await restoreDesktopSession();
       await refreshCloudflareConnection();
-      notify('Cloudflare bağlantısı doğrulandı.', 'success');
+      notify('Güvenli cihaz bağlantısı doğrulandı.', 'success');
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı doğrulanamadı.', 'error');
+      notify(error instanceof Error ? error.message : 'Güvenli cihaz bağlantısı doğrulanamadı.', 'error');
     } finally { setBusy(false); }
   }
 
   async function forgetCloudflare() {
-    if (!isDesktop || !window.confirm('Bu bilgisayardaki Cloudflare bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
+    if (!isDesktop || !window.confirm('Bu bilgisayardaki cihaz bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
     setBusy(true);
     try {
+      await desktopLogout().catch(() => undefined);
       await desktop.cloudflareForget();
-      setToken('');
-      setShowCloudflareUpdate(false);
       await refreshCloudflareConnection();
-      notify('Cloudflare bağlantısı kaldırıldı. Buluttaki işletme ve müşteri verileri korunuyor.', 'success');
+      notify('Bu bilgisayarın cihaz bağlantısı kaldırıldı. Buluttaki işletme ve müşteri verileri korunuyor.', 'success');
       onCloudflareDisconnected?.();
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Cloudflare bağlantısı kaldırılamadı.', 'error');
+      notify(error instanceof Error ? error.message : 'Cihaz bağlantısı kaldırılamadı.', 'error');
     } finally { setBusy(false); }
   }
 
@@ -306,34 +285,32 @@ export function SettingsPage({
   const webhook = `${isDesktop ? PRODUCTION_ORIGIN : window.location.origin}/webhooks/whatsapp`;
   const metaConnected = Boolean(meta?.configured);
   const metaPaused = meta?.status === 'paused';
+  const cloudflareMode = cloudflare?.mode === 'device_session'
+    ? 'Güvenli cihaz oturumu'
+    : cloudflare?.mode === 'installer_activation'
+      ? 'Kurulum etkinleştirmesi'
+      : cloudflare?.configured
+        ? 'Cihaz bağlantısı'
+        : 'Bağlantı yok';
 
   return <div className="page-stack">
     <section className="panel">
       <div className="panel-heading">
-        <div><h3>Cloudflare Bağlantısı</h3><p>Cloudflare bağlantısı yalnız bu bölümden yönetilir. Kayıtlı bağlantı uygulama kapatılıp açılsa da korunur.</p></div>
-        <span className={`pill ${cloudflare?.configured ? 'ready' : 'warn'}`}>{cloudflare?.configured ? 'Bağlı' : 'Bağlantı yok'}</span>
+        <div><h3>WPAI Cihaz Bağlantısı</h3><p>Cloudflare altyapısı uygulama tarafından yönetilir. Bu ekranda kullanıcı adı, e-posta, parola veya Cloudflare API tokeni girilmez.</p></div>
+        <span className={`pill ${cloudflare?.configured ? 'ready' : 'warn'}`}>{cloudflare?.configured ? 'Hazır' : 'Bağlantı yok'}</span>
       </div>
-      {!isDesktop ? <p className="safe-note">Cloudflare hesap bağlantısı WPAI Windows uygulamasındaki Ayarlar bölümünden yönetilir.</p> : cloudflare?.configured ? <>
+      {!isDesktop ? <p className="safe-note">Cihaz bağlantısı yalnız WPAI Windows uygulamasında kullanılır.</p> : <>
         <div className="summary-grid">
-          <div><span>Durum</span><strong>Bağlı</strong></div>
+          <div><span>Durum</span><strong>{cloudflareMode}</strong></div>
           <div><span>Saklama</span><strong>Windows güvenli depolama</strong></div>
           <div><span>Son kontrol</span><strong>{health?.ok ? 'Çalışıyor' : 'Doğrulama bekleniyor'}</strong></div>
         </div>
         <div className="form-actions">
-          <button type="button" className="button secondary" disabled={busy} onClick={() => void verifyCloudflareConnection()}>{busy ? 'Doğrulanıyor…' : 'Bağlantıyı Doğrula'}</button>
-          <button type="button" className="button secondary" disabled={busy} onClick={() => setShowCloudflareUpdate(value => !value)}>Bağlantı Bilgisini Güncelle</button>
-          <button type="button" className="button danger-button" disabled={busy} onClick={() => void forgetCloudflare()}>Bağlantıyı Kaldır</button>
+          <button type="button" className="button secondary" disabled={busy} onClick={() => void verifyCloudflareConnection()}>{busy ? 'Doğrulanıyor…' : 'Cihaz Bağlantısını Doğrula'}</button>
+          {cloudflare?.configured && <button type="button" className="button danger-button" disabled={busy} onClick={() => void forgetCloudflare()}>Bu Cihazın Bağlantısını Kaldır</button>}
         </div>
-        {showCloudflareUpdate && <form className="form-stack" onSubmit={saveCloudflareConnection}>
-          <label>Yeni Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" value={token} onChange={event => setToken(event.target.value)} /></label>
-          <p className="safe-note">Bu bağlantı cihaz oturumu ile çalışır; yönetici e-postası veya panel parolası kullanılmaz.</p>
-          <div className="form-actions"><button className="button primary" disabled={busy}>Doğrula ve Güncelle</button><button type="button" className="button secondary" onClick={() => { setToken(''); setShowCloudflareUpdate(false); }}>Vazgeç</button></div>
-        </form>}
-      </> : <form className="form-stack" onSubmit={saveCloudflareConnection}>
-        <label>Cloudflare API Token<input name="apiToken" type="password" required minLength={30} autoComplete="off" value={token} onChange={event => setToken(event.target.value)} /></label>
-        <p className="safe-note">Bağlantı doğrulanınca bu bilgisayarda güvenli biçimde saklanır. Account ID ve diğer teknik kimlikler kullanıcı ekranında gösterilmez; yönetici e-postası veya panel parolası kullanılmaz.</p>
-        <button className="button primary" disabled={busy}>{busy ? 'Bağlantı kuruluyor…' : 'Bağlantıyı Kur'}</button>
-      </form>}
+        {!cloudflare?.configured && <p className="safe-note">Geçerli otomatik etkinleştirme yoksa kullanıcıdan gizli anahtar istenmez. Doğrulanmış kurulum paketiyle cihaz bağlantısı otomatik oluşturulur.</p>}
+      </>}
     </section>
 
     <section className="panel">
