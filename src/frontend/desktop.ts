@@ -28,6 +28,23 @@ export type CloudflareBootstrapResult = {
   report?: Record<string, unknown>;
 };
 
+export type OAuthDesktopSession = {
+  admin: { id: string; name: string; email: string; role: string };
+  deviceId: string;
+  accessToken: string;
+  refreshToken: string;
+  accessExpiresAt: string;
+  refreshExpiresAt: string;
+};
+
+export type OAuthBootstrapResult = {
+  ok?: boolean;
+  mode?: string;
+  version?: string;
+  accountId?: string;
+  session?: OAuthDesktopSession;
+};
+
 export type DesktopConnectionStatus = {
   configured: boolean;
   accountId: string;
@@ -103,6 +120,12 @@ export const desktop = {
   },
   cloudflareConnectionStatus(): Promise<DesktopConnectionStatus> {
     return requiredInvoke<DesktopConnectionStatus>('cloudflare_connection_status');
+  },
+  cloudflareAutoBootstrap(deviceId: string): Promise<OAuthBootstrapResult> {
+    return requiredInvoke<OAuthBootstrapResult>('cloudflare_auto_bootstrap', { deviceId });
+  },
+  cloudflareOauthLogin(): Promise<Record<string, unknown>> {
+    return requiredInvoke<Record<string, unknown>>('cloudflare_oauth_login');
   },
   cloudflareScan(accountId: string, apiToken?: string): Promise<Record<string, unknown>> {
     return requiredInvoke('cloudflare_scan', { accountId, apiToken: apiToken || null });
