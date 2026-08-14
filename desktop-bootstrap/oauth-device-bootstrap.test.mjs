@@ -20,6 +20,9 @@ function makeFixture() {
   const fakeWrangler = path.join(root, 'fake-wrangler.mjs');
   fs.writeFileSync(fakeWrangler, `
 const args = process.argv.slice(2);
+for (const key of ['CLOUDFLARE_API_TOKEN','CLOUDFLARE_API_KEY','CLOUDFLARE_EMAIL','CF_API_TOKEN','CF_API_KEY','CF_EMAIL']) {
+  if (process.env[key]) { console.error('provider token env leaked into Wrangler OAuth: ' + key); process.exit(17); }
+}
 if (args[0] === 'whoami') {
   if (process.env.MOCK_WRANGLER_AUTH === 'fail') { console.error('Not logged in'); process.exit(1); }
   console.log('Account ID: ${ACCOUNT_ID}'); process.exit(0);
@@ -93,12 +96,16 @@ test('existing Wrangler OAuth deploys and creates a device session without email
         deviceId: `device-${'1'.repeat(40)}`,
         deviceName: 'WPAI Windows',
         appVersion: '1.3.6'
-      }, { WPAI_WORKER_URL: workerUrl });
+      }, {
+        WPAI_WORKER_URL: workerUrl,
+        CLOUDFLARE_API_TOKEN: 'expired-token-must-never-reach-wrangler-oauth',
+        CF_API_TOKEN: 'legacy-expired-token-must-also-be-removed'
+      });
       assert.equal(result.code, 0, result.stderr || result.stdout);
       assert.equal(result.body.ok, true);
       assert.equal(result.body.mode, 'wrangler_oauth_device');
       assert.ok(result.body.session.refreshToken.startsWith('refresh-'));
-      assert.equal(result.stdout.includes('cfat_'), false);
+      assert.equal(result.stdout.includes('expired-token'), false);
     });
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -113,12 +120,13 @@ test('missing Wrangler OAuth returns a specific browser-login requirement instea
       deviceId: `device-${'2'.repeat(40)}`,
       deviceName: 'WPAI Windows',
       appVersion: '1.3.6'
-    }, { MOCK_WRANGLER_AUTH: 'fail' });
+    }, { MOCK_WRANGLER_AUTH: 'fail', CLOUDFLARE_API_TOKEN: 'expired-token' });
     assert.equal(result.code, 1);
     assert.equal(result.body.ok, false);
     assert.match(result.body.error, /WRANGLER_OAUTH_REQUIRED/);
     assert.doesNotMatch(result.body.error, /API tokeni girin/i);
     assert.doesNotMatch(result.body.error, /e-posta|parola/i);
+    assert.doesNotMatch(result.body.error, /expired-token/i);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -127,10 +135,11 @@ test('missing Wrangler OAuth returns a specific browser-login requirement instea
 test('OAuth login action uses Wrangler login and never receives administrator credentials', async () => {
   const fixture = makeFixture();
   try {
-    const result = await runBootstrap(fixture, { action: 'login' });
+    const result = await runBootstrap(fixture, { action: 'login' }, { CLOUDFLARE_API_TOKEN: 'expired-token' });
     assert.equal(result.code, 0, result.stdout);
     assert.equal(result.body.ok, true);
     assert.equal(result.body.mode, 'wrangler_oauth');
+    assert.doesNotMatch(result.stdout, /expired-token/i);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
