@@ -1,0 +1,299 @@
+name: WPAI Integrate Wrangler OAuth
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - '.github/workflows/integrate-wrangler-oauth.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wire native commands, frontend OAuth fallback and validation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text('utf-8')
+              if old not in text:
+                  raise SystemExit(f'anchor missing in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1), 'utf-8')
+
+          # Native Tauri registration.
+          replace_once('src-tauri/src/lib.rs', 'mod cloudflare;\n', 'mod cloudflare;\nmod oauth_bootstrap;\n')
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '            cloudflare::cloudflare_forget,\n            faiss_health,',
+              '            cloudflare::cloudflare_forget,\n            oauth_bootstrap::cloudflare_auto_bootstrap,\n            oauth_bootstrap::cloudflare_oauth_login,\n            faiss_health,'
+          )
+          replace_once(
+              'src-tauri/src/lib.rs',
+              '        assert!(permissions.contains("cloudflare_forget"));\n',
+              '        assert!(permissions.contains("cloudflare_forget"));\n        assert!(permissions.contains("cloudflare_auto_bootstrap"));\n        assert!(permissions.contains("cloudflare_oauth_login"));\n'
+          )
+
+          # ACL permission surface.
+          replace_once(
+              'src-tauri/permissions/default.toml',
+              '  "cloudflare_forget",\n',
+              '  "cloudflare_forget",\n  "cloudflare_auto_bootstrap",\n  "cloudflare_oauth_login",\n'
+          )
+
+          # Tauri build manifest knows the new commands.
+          replace_once(
+              'src-tauri/build.rs',
+              '        "faiss_search",\n',
+              '        "faiss_search",\n        "cloudflare_auto_bootstrap",\n        "cloudflare_oauth_login",\n'
+          )
+
+          # App imports browser OAuth helper.
+          replace_once(
+              'src/frontend/App.tsx',
+              '  isDesktop,\n  publicRawJson,',
+              '  isDesktop,\n  openCloudflareBrowserLogin,\n  publicRawJson,'
+          )
+
+          app = Path('src/frontend/App.tsx')
+          text = app.read_text('utf-8')
+          # Track the actual automatic connection error so the fallback screen can decide whether browser OAuth is needed.
+          anchor = "  const [cloudflareConnection, setCloudflareConnection] = useState<CloudflareConnection>(DEFAULT_CONNECTION);\n"
+          if anchor not in text:
+              raise SystemExit('App connection state anchor missing')
+          text = text.replace(anchor, anchor + "  const [connectionIssue, setConnectionIssue] = useState('');\n", 1)
+          text = text.replace(
+              "      setAuth({ phase: 'ready', admin: session.admin });",
+              "      setConnectionIssue('');\n      setAuth({ phase: 'ready', admin: session.admin });",
+              1
+          )
+          catch_old = '''    } catch (error) {
+              openConnections(currentConnection);
+              notify(
+                error instanceof Error
+                  ? `Otomatik cihaz bağlantısı kurulamadı: ${error.message}`
+                  : 'Otomatik cihaz bağlantısı kurulamadı.',
+                'error'
+              );
+            }'''
+          catch_new = '''    } catch (error) {
+              const message = error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.';
+              setConnectionIssue(message);
+              openConnections(currentConnection);
+              notify(`Otomatik cihaz bağlantısı kurulamadı: ${message}`, 'error');
+            }'''
+          if catch_old not in text:
+              raise SystemExit('App boot catch anchor missing')
+          text = text.replace(catch_old, catch_new, 1)
+          text = text.replace(
+              '    onConnectionChange={setCloudflareConnection}\n    onReady={admin => setAuth({ phase: \'ready\', admin })}',
+              '    onConnectionChange={setCloudflareConnection}\n    initialError={connectionIssue}\n    onReady={admin => { setConnectionIssue(\'\'); setAuth({ phase: \'ready\', admin }); }}',
+              1
+          )
+
+          # Replace only the connection-page function; the rest of the product shell stays untouched.
+          pattern = re.compile(r"function DesktopConnectionsPage\(\{.*?\n\}\n\nfunction Centered", re.S)
+          replacement = r'''function DesktopConnectionsPage({
+            connection,
+            online,
+            notify,
+            onConnectionChange,
+            initialError,
+            onReady
+          }: {
+            connection: CloudflareConnection;
+            online: boolean;
+            notify: Notify;
+            onConnectionChange: (connection: CloudflareConnection) => void;
+            initialError: string;
+            onReady: (admin: Admin) => void;
+          }) {
+            const [busy, setBusy] = useState(false);
+            const [connectionError, setConnectionError] = useState(initialError);
+            useEffect(() => { setConnectionError(initialError); }, [initialError]);
+
+            async function refreshConnection() {
+              const value = await desktop.cloudflareConnectionStatus();
+              onConnectionChange(value);
+              return value;
+            }
+
+            async function retryAutomaticConnection() {
+              if (!online) {
+                notify('İnternet bağlantısı yok. Cihaz kaydı korunuyor.', 'info');
+                return;
+              }
+              setBusy(true);
+              setConnectionError('');
+              try {
+                const session = await restoreDesktopSession();
+                await refreshConnection();
+                notify('Cihaz bağlantısı hazır.', 'success');
+                onReady(session.admin);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.';
+                setConnectionError(message);
+                notify(message, 'error');
+              } finally {
+                setBusy(false);
+              }
+            }
+
+            async function openOauthLogin() {
+              if (!online) {
+                notify('İnternet bağlantısı yok. Cloudflare oturumu açılamıyor.', 'info');
+                return;
+              }
+              setBusy(true);
+              setConnectionError('');
+              try {
+                await openCloudflareBrowserLogin();
+                const session = await restoreDesktopSession();
+                await refreshConnection();
+                notify('Cloudflare tarayıcı oturumu doğrulandı ve cihaz bağlantısı hazır.', 'success');
+                onReady(session.admin);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : 'Cloudflare tarayıcı oturumu tamamlanamadı.';
+                setConnectionError(message);
+                notify(message, 'error');
+              } finally {
+                setBusy(false);
+              }
+            }
+
+            async function removeConnection() {
+              if (!window.confirm('Bu bilgisayardaki cihaz bağlantısı kaldırılsın mı? D1, R2 ve müşteri verileri silinmez.')) return;
+              setBusy(true);
+              try {
+                await desktopLogout().catch(() => undefined);
+                await desktop.cloudflareForget();
+                const value = await refreshConnection();
+                setConnectionError('');
+                notify('Bu bilgisayarın cihaz bağlantısı kaldırıldı. Buluttaki veriler korunuyor.', 'success');
+                onConnectionChange(value);
+              } catch (error) {
+                notify(error instanceof Error ? error.message : 'Cihaz bağlantısı kaldırılamadı.', 'error');
+              } finally {
+                setBusy(false);
+              }
+            }
+
+            const needsOauthLogin = connectionError.includes('WRANGLER_OAUTH_REQUIRED');
+            const modeText = connection.mode === 'device_session'
+              ? 'Güvenli cihaz oturumu'
+              : connection.mode === 'installer_activation'
+                ? 'Kurulum etkinleştirmesi hazır'
+                : needsOauthLogin
+                  ? 'Cloudflare tarayıcı oturumu gerekli'
+                  : connection.configured
+                    ? 'Cihaz bağlantısı hazır'
+                    : 'Otomatik bağlantı hazırlanıyor';
+
+            return <div className="app-shell">
+              <aside className="sidebar">
+                <div className="brand"><span className="brand-mark" aria-hidden="true">W</span><div><strong>WPAI Yönetim Paneli</strong><small>WhatsApp ve AI Yönetimi</small></div></div>
+                <nav aria-label="Ana menü"><button className="active" aria-current="page"><span aria-hidden="true">⚙</span>Ayarlar</button></nav>
+              </aside>
+              <main className="main">
+                <header className="topbar">
+                  <div><h1>Ayarlar</h1><p>Cihaz bağlantısı</p></div>
+                  <div className="top-actions"><span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı bekleniyor'}</span></div>
+                </header>
+                <section className="content">
+                  <div className="page-stack">
+                    {!online && <section className="panel"><div className="panel-heading"><div><h3>İnternet bağlantısı yok</h3><p>Kayıtlı cihaz bağlantısı silinmedi. İnternet geldiğinde otomatik olarak yeniden denenecek.</p></div><span className="pill warn">Çevrimdışı</span></div></section>}
+                    <section className="panel">
+                      <div className="panel-heading">
+                        <div><h3>WPAI Cihaz Bağlantısı</h3><p>Uygulama önce bu bilgisayardaki mevcut Wrangler OAuth oturumunu kullanır. Kullanıcı adı, e-posta, parola veya Cloudflare API tokeni uygulamaya girilmez.</p></div>
+                        <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı bekleniyor'}</span>
+                      </div>
+                      <div className="summary-grid">
+                        <div><span>Durum</span><strong>{modeText}</strong></div>
+                        <div><span>Kimlik doğrulama</span><strong>Cihaza bağlı OAuth oturumu</strong></div>
+                        <div><span>İnternet</span><strong>{online ? 'Kullanılabilir' : 'Bağlantı bekleniyor'}</strong></div>
+                      </div>
+                      {needsOauthLogin && <p className="safe-note">Cloudflare oturumu bulunamadı. Aşağıdaki düğme Cloudflare’ın resmî giriş sayfasını varsayılan tarayıcıda açar; WPAI içine e-posta, parola veya API token girilmez.</p>}
+                      {!needsOauthLogin && !connection.configured && <p className="safe-note">WPAI kayıtlı Wrangler oturumunu, production D1 migrasyonlarını ve Worker bağlantısını otomatik olarak doğruluyor.</p>}
+                      {connectionError && !needsOauthLogin && <p className="safe-note" role="alert">{connectionError}</p>}
+                      <div className="form-actions">
+                        {needsOauthLogin
+                          ? <button type="button" className="button primary" disabled={busy || !online} onClick={() => void openOauthLogin()}>{busy ? 'Cloudflare açılıyor…' : 'Cloudflare Oturumunu Aç'}</button>
+                          : <button type="button" className="button primary" disabled={busy || !online} onClick={() => void retryAutomaticConnection()}>{busy ? 'Bağlanıyor…' : 'Cihaz Bağlantısını Yeniden Dene'}</button>}
+                        {connection.configured && <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bu Cihazın Bağlantısını Kaldır</button>}
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              </main>
+            </div>;
+          }
+
+          function Centered'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('DesktopConnectionsPage function block missing')
+          app.write_text(text, 'utf-8')
+
+          # Static validator tracks the new source and native capability.
+          validate = Path('scripts/validate.py')
+          text = validate.read_text('utf-8')
+          if '"src-tauri/src/oauth_bootstrap.rs"' not in text:
+              text = text.replace(
+                  '"src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs",',
+                  '"src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/lib.rs", "src-tauri/src/oauth_bootstrap.rs",'
+              )
+          if '"desktop-bootstrap/oauth-device-bootstrap.mjs"' not in text:
+              text = text.replace(
+                  '"brand/product-brand.json", "scripts/sync_brand.py", "docs/SPEC-500-EVIDENCE.json",',
+                  '"brand/product-brand.json", "scripts/sync_brand.py", "docs/SPEC-500-EVIDENCE.json",\n        "desktop-bootstrap/oauth-device-bootstrap.mjs", "desktop-bootstrap/oauth-device-bootstrap.test.mjs",'
+              )
+          app_require = 'for required in ("phase: \'connections\'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "restoreDesktopSession", "Cihaz Bağlantısını Yeniden Dene"):'
+          if app_require in text:
+              text = text.replace(
+                  app_require,
+                  'for required in ("phase: \'connections\'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "restoreDesktopSession", "openCloudflareBrowserLogin", "Cloudflare Oturumunu Aç", "Cihaz Bağlantısını Yeniden Dene"):',
+                  1
+              )
+          validate.write_text(text, 'utf-8')
+
+          spec = Path('scripts/validate_spec500.py')
+          text = spec.read_text('utf-8')
+          oauth_require = '''    require("desktop-bootstrap/oauth-device-bootstrap.mjs", "WRANGLER_OAUTH_REQUIRED", "wrangler(['whoami'])", "wrangler(['login'])", "d1", "deploy")
+          require("desktop-bootstrap/oauth-device-bootstrap.test.mjs", "existing Wrangler OAuth", "missing Wrangler OAuth", "never receives administrator credentials")
+          require("src-tauri/src/oauth_bootstrap.rs", "cloudflare_auto_bootstrap", "cloudflare_oauth_login", "oauth-device-bootstrap.mjs")
+          require("src/frontend/desktop.ts", "cloudflareAutoBootstrap", "cloudflareOauthLogin")
+          require("src/frontend/api.ts", "bootstrapViaWranglerOAuth", "openCloudflareBrowserLogin")
+          require("src/frontend/App.tsx", "Cloudflare Oturumunu Aç", "openCloudflareBrowserLogin")
+          '''
+          marker = '    require("src/frontend/pages/desktopIndex.tsx", "faissSearchText")\n'
+          if 'oauth-device-bootstrap.mjs", "WRANGLER_OAUTH_REQUIRED"' not in text:
+              if marker not in text:
+                  raise SystemExit('spec oauth insertion marker missing')
+              text = text.replace(marker, oauth_require + marker, 1)
+          spec.write_text(text, 'utf-8')
+          PY
+      - name: Validate patch formatting
+        run: git diff --check
+      - name: Commit integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/lib.rs src-tauri/permissions/default.toml src-tauri/build.rs src/frontend/App.tsx scripts/validate.py scripts/validate_spec500.py
+          git commit -m 'Wire credential-free Wrangler OAuth bootstrap'
+          git push origin HEAD:agent/wpai-production-rebuild
