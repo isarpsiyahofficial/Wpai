@@ -140,12 +140,18 @@ fn execute(app: &AppHandle, payload: Value) -> Result<Value, String> {
     Ok(parsed)
 }
 
+async fn execute_blocking(app: AppHandle, payload: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || execute(&app, payload))
+        .await
+        .map_err(|error| format!("Otomatik Cloudflare bağlantı görevi tamamlanamadı: {error}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
-pub fn cloudflare_auto_bootstrap(app: AppHandle, device_id: String) -> Result<Value, String> {
+pub async fn cloudflare_auto_bootstrap(app: AppHandle, device_id: String) -> Result<Value, String> {
     let device_id = device_id.trim().to_string();
     validate_device_id(&device_id)?;
-    execute(
-        &app,
+    execute_blocking(
+        app,
         json!({
             "action": "bootstrap",
             "deviceId": device_id,
@@ -153,11 +159,12 @@ pub fn cloudflare_auto_bootstrap(app: AppHandle, device_id: String) -> Result<Va
             "appVersion": env!("CARGO_PKG_VERSION")
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn cloudflare_oauth_login(app: AppHandle) -> Result<Value, String> {
-    execute(&app, json!({ "action": "login" }))
+pub async fn cloudflare_oauth_login(app: AppHandle) -> Result<Value, String> {
+    execute_blocking(app, json!({ "action": "login" })).await
 }
 
 #[cfg(test)]
