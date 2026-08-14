@@ -79,7 +79,9 @@ def validate_versions_and_brand() -> None:
 def validate_critical_runtime_gates() -> None:
     require("src-tauri/src/main.rs", 'windows_subsystem = "windows"')
     require("src-tauri/src/lib.rs", "faiss_search_text", '"search-text"', "tauri_plugin_single_instance::init")
-    require("src-tauri/build.rs", "rerun-if-env-changed=WPAI_DESKTOP_ACTIVATION_TOKEN")
+    require("src-tauri/src/lib.rs", "oauth_bootstrap::cloudflare_auto_bootstrap", "oauth_bootstrap::cloudflare_oauth_login")
+    require("src-tauri/permissions/default.toml", '"cloudflare_auto_bootstrap"', '"cloudflare_oauth_login"')
+    require("src-tauri/build.rs", "rerun-if-env-changed=WPAI_DESKTOP_ACTIVATION_TOKEN", '"cloudflare_auto_bootstrap"', '"cloudflare_oauth_login"')
     require("sidecar/faiss_service.py", "TEXT_INDEX_VERSION", "text_vector", "search_text", 'text-index.faiss')
     require("sidecar/test_faiss_service.py", "offline_text_search", "TEXT_INDEX_REBUILD_REQUIRED")
 
@@ -89,8 +91,10 @@ def validate_critical_runtime_gates() -> None:
         "DesktopConnectionsPage",
         "cloudflareConnectionStatus",
         "restoreDesktopSession",
+        "openCloudflareBrowserLogin",
+        "Cloudflare Oturumunu Aç",
         "Cihaz Bağlantısını Yeniden Dene",
-        "kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden"
+        "Kullanıcı adı, e-posta, parola veya Cloudflare API tokeni uygulamaya girilmez."
     )
     forbid(
         "src/frontend/App.tsx",
@@ -119,6 +123,30 @@ def validate_critical_runtime_gates() -> None:
         "never asks for email or password",
         "never as a fake permission error"
     )
+    require(
+        "desktop-bootstrap/oauth-device-bootstrap.mjs",
+        "WRANGLER_OAUTH_REQUIRED",
+        "wrangler(['whoami'])",
+        "wrangler(['login'])",
+        "applyMigrations",
+        "buildAndDeploy",
+        "activationTicket",
+        "activateDevice"
+    )
+    require(
+        "desktop-bootstrap/oauth-device-bootstrap.test.mjs",
+        "existing Wrangler OAuth",
+        "missing Wrangler OAuth",
+        "never receives administrator credentials"
+    )
+    require(
+        "src-tauri/src/oauth_bootstrap.rs",
+        "cloudflare_auto_bootstrap",
+        "cloudflare_oauth_login",
+        "oauth-device-bootstrap.mjs"
+    )
+    require("src/frontend/desktop.ts", "cloudflareAutoBootstrap", "cloudflareOauthLogin")
+    require("src/frontend/api.ts", "bootstrapViaWranglerOAuth", "openCloudflareBrowserLogin", "bootstrapNewDesktopSession")
     require(
         "src/frontend/pages/settings.tsx",
         "WPAI Cihaz Bağlantısı",
@@ -157,7 +185,9 @@ def validate_critical_runtime_gates() -> None:
     require(
         "tests/e2e/auth-regression.spec.mjs",
         "first launch activates the Windows device automatically",
-        "invalid installer activation",
+        "existing Wrangler OAuth session",
+        "Cloudflare Oturumunu Aç",
+        "expired installer activation",
         'not.toHaveProperty(\'apiToken\')'
     )
     require("scripts/verify-installed-webview.mjs", "Gösterge Paneli", "WPAI Cihaz Bağlantısı", "cloudflareCredentialInputs: 0")
