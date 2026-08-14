@@ -8,6 +8,8 @@ fn main() {
         "faiss_health",
         "faiss_upsert",
         "faiss_search",
+        "cloudflare_auto_bootstrap",
+        "cloudflare_oauth_login",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

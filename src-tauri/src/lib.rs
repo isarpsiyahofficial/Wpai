@@ -1,4 +1,5 @@
 mod cloudflare;
+mod oauth_bootstrap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -635,6 +636,8 @@ pub fn run() {
             cloudflare::cloudflare_repair,
             cloudflare::cloudflare_setup,
             cloudflare::cloudflare_forget,
+            oauth_bootstrap::cloudflare_auto_bootstrap,
+            oauth_bootstrap::cloudflare_oauth_login,
             faiss_health,
             faiss_status,
             faiss_replace,
@@ -693,6 +696,8 @@ mod tests {
         assert!(permissions.contains("cloudflare_scan"));
         assert!(permissions.contains("cloudflare_repair"));
         assert!(permissions.contains("cloudflare_forget"));
+        assert!(permissions.contains("cloudflare_auto_bootstrap"));
+        assert!(permissions.contains("cloudflare_oauth_login"));
         assert!(!permissions.contains("load_cloudflare_api_token"));
         assert!(!permissions.contains("meta_access_token"));
         assert!(permissions.contains("save_desktop_refresh_token"));

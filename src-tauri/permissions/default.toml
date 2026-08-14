@@ -18,6 +18,8 @@ commands.allow = [
   "cloudflare_repair",
   "cloudflare_setup",
   "cloudflare_forget",
+  "cloudflare_auto_bootstrap",
+  "cloudflare_oauth_login",
   "faiss_health",
   "faiss_status",
   "faiss_replace",

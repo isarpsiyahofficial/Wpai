@@ -5,6 +5,7 @@ import {
   desktopLogout,
   downloadApiFile,
   isDesktop,
+  openCloudflareBrowserLogin,
   publicRawJson,
   restoreDesktopSession
 } from './api';
@@ -70,6 +71,7 @@ export function App() {
   const [toast, setToast] = useState<Toast>(null);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [cloudflareConnection, setCloudflareConnection] = useState<CloudflareConnection>(DEFAULT_CONNECTION);
+  const [connectionIssue, setConnectionIssue] = useState('');
 
   const notify: Notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
@@ -114,16 +116,14 @@ export function App() {
       const session = await restoreDesktopSession();
       const refreshed = await desktop.cloudflareConnectionStatus().catch(() => currentConnection);
       setCloudflareConnection(refreshed);
+      setConnectionIssue('');
       setAuth({ phase: 'ready', admin: session.admin });
     } catch (error) {
-      openConnections(currentConnection);
-      notify(
-        error instanceof Error
-          ? `Otomatik cihaz bağlantısı kurulamadı: ${error.message}`
-          : 'Otomatik cihaz bağlantısı kurulamadı.',
-        'error'
-      );
-    }
+    const message = error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.';
+    setConnectionIssue(message);
+    openConnections(currentConnection);
+    notify(`Otomatik cihaz bağlantısı kurulamadı: ${message}`, 'error');
+  }
   }, [browserLayoutTest, desktopMode, notify, openConnections]);
 
   useEffect(() => { void boot(); }, [boot]);
@@ -200,7 +200,8 @@ export function App() {
     online={online}
     notify={notify}
     onConnectionChange={setCloudflareConnection}
-    onReady={admin => setAuth({ phase: 'ready', admin })}
+    initialError={connectionIssue}
+    onReady={admin => { setConnectionIssue(''); setAuth({ phase: 'ready', admin }); }}
   />{authToast}</>;
 
   const brandInitial = (branding.app_name || 'W').trim().slice(0, 1).toUpperCase();
@@ -244,15 +245,19 @@ function DesktopConnectionsPage({
   online,
   notify,
   onConnectionChange,
+  initialError,
   onReady
 }: {
   connection: CloudflareConnection;
   online: boolean;
   notify: Notify;
   onConnectionChange: (connection: CloudflareConnection) => void;
+  initialError: string;
   onReady: (admin: Admin) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [connectionError, setConnectionError] = useState(initialError);
+  useEffect(() => { setConnectionError(initialError); }, [initialError]);
 
   async function refreshConnection() {
     const value = await desktop.cloudflareConnectionStatus();
@@ -266,13 +271,38 @@ function DesktopConnectionsPage({
       return;
     }
     setBusy(true);
+    setConnectionError('');
     try {
       const session = await restoreDesktopSession();
       await refreshConnection();
       notify('Cihaz bağlantısı hazır.', 'success');
       onReady(session.admin);
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.', 'error');
+      const message = error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.';
+      setConnectionError(message);
+      notify(message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openOauthLogin() {
+    if (!online) {
+      notify('İnternet bağlantısı yok. Cloudflare oturumu açılamıyor.', 'info');
+      return;
+    }
+    setBusy(true);
+    setConnectionError('');
+    try {
+      await openCloudflareBrowserLogin();
+      const session = await restoreDesktopSession();
+      await refreshConnection();
+      notify('Cloudflare tarayıcı oturumu doğrulandı ve cihaz bağlantısı hazır.', 'success');
+      onReady(session.admin);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Cloudflare tarayıcı oturumu tamamlanamadı.';
+      setConnectionError(message);
+      notify(message, 'error');
     } finally {
       setBusy(false);
     }
@@ -285,6 +315,7 @@ function DesktopConnectionsPage({
       await desktopLogout().catch(() => undefined);
       await desktop.cloudflareForget();
       const value = await refreshConnection();
+      setConnectionError('');
       notify('Bu bilgisayarın cihaz bağlantısı kaldırıldı. Buluttaki veriler korunuyor.', 'success');
       onConnectionChange(value);
     } catch (error) {
@@ -294,13 +325,16 @@ function DesktopConnectionsPage({
     }
   }
 
+  const needsOauthLogin = connectionError.includes('WRANGLER_OAUTH_REQUIRED');
   const modeText = connection.mode === 'device_session'
     ? 'Güvenli cihaz oturumu'
     : connection.mode === 'installer_activation'
       ? 'Kurulum etkinleştirmesi hazır'
-      : connection.configured
-        ? 'Cihaz bağlantısı hazır'
-        : 'Etkinleştirme bulunamadı';
+      : needsOauthLogin
+        ? 'Cloudflare tarayıcı oturumu gerekli'
+        : connection.configured
+          ? 'Cihaz bağlantısı hazır'
+          : 'Otomatik bağlantı hazırlanıyor';
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -310,24 +344,28 @@ function DesktopConnectionsPage({
     <main className="main">
       <header className="topbar">
         <div><h1>Ayarlar</h1><p>Cihaz bağlantısı</p></div>
-        <div className="top-actions"><span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı yok'}</span></div>
+        <div className="top-actions"><span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı bekleniyor'}</span></div>
       </header>
       <section className="content">
         <div className="page-stack">
           {!online && <section className="panel"><div className="panel-heading"><div><h3>İnternet bağlantısı yok</h3><p>Kayıtlı cihaz bağlantısı silinmedi. İnternet geldiğinde otomatik olarak yeniden denenecek.</p></div><span className="pill warn">Çevrimdışı</span></div></section>}
           <section className="panel">
             <div className="panel-heading">
-              <div><h3>WPAI Cihaz Bağlantısı</h3><p>Bu uygulama kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden kendi güvenli cihaz oturumunu açar.</p></div>
-              <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı yok'}</span>
+              <div><h3>WPAI Cihaz Bağlantısı</h3><p>Uygulama önce bu bilgisayardaki mevcut Wrangler OAuth oturumunu kullanır. Kullanıcı adı, e-posta, parola veya Cloudflare API tokeni uygulamaya girilmez.</p></div>
+              <span className={`pill ${connection.configured ? 'ready' : 'warn'}`}>{connection.configured ? 'Hazır' : 'Bağlantı bekleniyor'}</span>
             </div>
             <div className="summary-grid">
               <div><span>Durum</span><strong>{modeText}</strong></div>
-              <div><span>Kimlik doğrulama</span><strong>Cihaza bağlı</strong></div>
+              <div><span>Kimlik doğrulama</span><strong>Cihaza bağlı OAuth oturumu</strong></div>
               <div><span>İnternet</span><strong>{online ? 'Kullanılabilir' : 'Bağlantı bekleniyor'}</strong></div>
             </div>
-            {!connection.configured && <p className="safe-note">Bu kurulum paketinde geçerli otomatik etkinleştirme bulunamadıysa kullanıcıdan gizli anahtar istenmez; doğrulanmış yeni kurulum paketi gerekir.</p>}
+            {needsOauthLogin && <p className="safe-note">Cloudflare oturumu bulunamadı. Aşağıdaki düğme Cloudflare’ın resmî giriş sayfasını varsayılan tarayıcıda açar; WPAI içine e-posta, parola veya API token girilmez.</p>}
+            {!needsOauthLogin && !connection.configured && <p className="safe-note">WPAI kayıtlı Wrangler oturumunu, production D1 migrasyonlarını ve Worker bağlantısını otomatik olarak doğruluyor.</p>}
+            {connectionError && !needsOauthLogin && <p className="safe-note" role="alert">{connectionError}</p>}
             <div className="form-actions">
-              <button type="button" className="button primary" disabled={busy || !online} onClick={() => void retryAutomaticConnection()}>{busy ? 'Bağlanıyor…' : 'Cihaz Bağlantısını Yeniden Dene'}</button>
+              {needsOauthLogin
+                ? <button type="button" className="button primary" disabled={busy || !online} onClick={() => void openOauthLogin()}>{busy ? 'Cloudflare açılıyor…' : 'Cloudflare Oturumunu Aç'}</button>
+                : <button type="button" className="button primary" disabled={busy || !online} onClick={() => void retryAutomaticConnection()}>{busy ? 'Bağlanıyor…' : 'Cihaz Bağlantısını Yeniden Dene'}</button>}
               {connection.configured && <button type="button" className="button danger-button" disabled={busy} onClick={() => void removeConnection()}>Bu Cihazın Bağlantısını Kaldır</button>}
             </div>
           </section>
