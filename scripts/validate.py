@@ -37,7 +37,8 @@ def validate_files() -> None:
         "migrations/0004_feature_modules.sql", "migrations/0005_runtime_hardening.sql",
         "migrations/0006_ai_usage_and_summary_settings.sql", "migrations/0007_training_vector_desktop.sql",
         "migrations/0008_training_publication_links.sql", "migrations/0009_source_extractions.sql",
-        "tests/worker/auth.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
+        "migrations/0010_desktop_activation_tokens.sql",
+        "tests/worker/auth.test.ts", "tests/worker/device-activation.test.ts", "tests/worker/isolation-and-gates.test.ts", "tests/worker/webhook.test.ts",
         "tests/worker/scoped-files.test.ts", "tests/worker/neuron-usage.test.ts", "tests/unit/ai-claims.test.ts",
         "tests/e2e/playwright.config.mjs", "tests/e2e/responsive.spec.mjs", "tests/e2e/offline-desktop.spec.mjs", "tests/e2e/live-worker-smoke.mjs"
     ]
@@ -115,16 +116,17 @@ def validate_e2e_gates() -> None:
         "phone-320x568", "phone-390x844", "tablet-768x1024",
         "laptop-1366x768", "desktop-1920x1080",
         "document horizontal overflow", "clipped text", "overlapping sibling elements",
-        "critical administrator workflows", "setup and login screens", "API failure"
+        "critical administrator workflows", "credential-free device connection", "API failure"
     ):
         if required not in browser:
             raise AssertionError(f"Responsive browser coverage missing: {required}")
     offline = (ROOT / "tests/e2e/offline-desktop.spec.mjs").read_text("utf-8")
     for required in (
         "offline startup stays in Settings",
-        "removing a saved connection keeps it removed",
-        "Cloudflare Bağlantısı",
-        "Bağlantıyı Kaldır",
+        "removing a saved device connection keeps it removed",
+        "WPAI Cihaz Bağlantısı",
+        "Bu Cihazın Bağlantısını Kaldır",
+        "input[name=\"apiToken\"]",
         "Yerel Bilgi Modu"
     ):
         if required not in offline:
@@ -186,7 +188,7 @@ def validate_migrations() -> None:
         "human_handoffs", "admin_notifications", "follow_up_tasks", "audit_logs", "webhook_events",
         "integration_credentials", "admin_ai_threads", "admin_ai_messages", "ai_usage_records",
         "ai_training_items", "ai_training_thread_state", "knowledge_sources", "knowledge_source_extractions",
-        "knowledge_versions", "vector_sync_jobs", "retrieval_logs", "desktop_devices", "desktop_sessions",
+        "knowledge_versions", "vector_sync_jobs", "retrieval_logs", "desktop_devices", "desktop_sessions", "desktop_activation_tokens",
         "csv_imports", "csv_import_rows", "canned_replies", "dead_letter_jobs",
         "training_item_publications", "source_knowledge_links"
     }
@@ -222,10 +224,10 @@ def validate_product_scope() -> None:
     for forbidden in ("Yerel Bilgi Modu", "OfflineDesktopPage", "phase: 'offline'", "Cloudflare Kurulumu ve Onarımı"):
         if forbidden in app:
             raise AssertionError(f"Superseded desktop connection flow returned: {forbidden}")
-    for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "Bağlantıyı Kaldır"):
+    for required in ("phase: 'connections'", "DesktopConnectionsPage", "cloudflareConnectionStatus", "restoreDesktopSession", "Cihaz Bağlantısını Yeniden Dene"):
         if required not in app:
             raise AssertionError(f"Settings-only connection flow missing: {required}")
-    for forbidden in ("Yönetici e-postası<input", "Yeni parola<input", "Parola tekrarı<input", "Panele Giriş Yap"):
+    for forbidden in ("Yönetici e-postası<input", "Yeni parola<input", "Parola tekrarı<input", "Panele Giriş Yap", "name=\"apiToken\"", "Cloudflare User veya Account API Token"):
         if forbidden in app:
             raise AssertionError(f"Passwordless desktop onboarding regressed: {forbidden}")
     api = "\n".join((ROOT / path).read_text("utf-8") for path in (
@@ -251,14 +253,15 @@ def validate_product_scope() -> None:
             raise AssertionError(f"Scoped retrieval capability missing: {required}")
     settings = (ROOT / "src/frontend/pages/settings.tsx").read_text("utf-8")
     for label in (
-        "Cloudflare Bağlantısı", "WhatsApp / Meta Bağlantısı", "Bağlantı Bilgisini Güncelle",
-        "Bağlantıyı Kaldır", "Bağlı"
+        "WPAI Cihaz Bağlantısı", "WhatsApp / Meta Bağlantısı", "Cihaz Bağlantısını Doğrula",
+        "Bu Cihazın Bağlantısını Kaldır", "Hazır"
     ):
         if label not in settings:
             raise AssertionError(f"Settings capability missing: {label}")
     for forbidden in (
         "Tam Sistem Taraması", "Eksikleri Kur ve Onar", "<label>Account ID<input",
-        "<h3>Parola Değiştir</h3>", "Mevcut parola<input", "Yeni parola tekrarı<input"
+        "<h3>Parola Değiştir</h3>", "Mevcut parola<input", "Yeni parola tekrarı<input",
+        "name=\"apiToken\"", "Yeni Cloudflare API Token", "Cloudflare User veya Account API Token"
     ):
         if forbidden in settings:
             raise AssertionError(f"Superseded or technical settings control must not be exposed: {forbidden}")

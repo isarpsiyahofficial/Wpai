@@ -83,27 +83,28 @@ def validate_critical_runtime_gates() -> None:
     require("sidecar/test_faiss_service.py", "offline_text_search", "TEXT_INDEX_REBUILD_REQUIRED")
 
     require(
-        "src/frontend/App.tsx",
-        "phase: 'connections'",
-        "DesktopConnectionsPage",
-        "cloudflareConnectionStatus",
-        "Bağlantıyı Kaldır",
-        "Yalnız Cloudflare API tokeni kullanılır",
-        "Yönetici e-postası, kullanıcı adı veya parola istenmez",
-        "device-bootstrap-v6"
-    )
-    forbid(
-        "src/frontend/App.tsx",
-        "phase: 'offline'",
-        "OfflineDesktopPage",
-        "Yerel Bilgi Modu",
-        "Buluta Yeniden Bağlan",
-        "Cloudflare Kurulumu ve Onarımı",
-        "Yönetici e-postası<input",
-        "Yeni parola<input",
-        "Parola tekrarı<input",
-        "Panele Giriş Yap"
-    )
+    "src/frontend/App.tsx",
+    "phase: 'connections'",
+    "DesktopConnectionsPage",
+    "cloudflareConnectionStatus",
+    "restoreDesktopSession",
+    "Cihaz Bağlantısını Yeniden Dene",
+    "kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden"
+)
+forbid(
+    "src/frontend/App.tsx",
+    "phase: 'offline'",
+    "OfflineDesktopPage",
+    "Yerel Bilgi Modu",
+    "Buluta Yeniden Bağlan",
+    "Cloudflare Kurulumu ve Onarımı",
+    "Yönetici e-postası<input",
+    "Yeni parola<input",
+    "Parola tekrarı<input",
+    "Panele Giriş Yap",
+    "name=\"apiToken\"",
+    "Cloudflare User veya Account API Token"
+)
     require(
         "desktop-bootstrap/bootstrap-v6.mjs",
         "device-bootstrap-v6",
@@ -118,13 +119,22 @@ def validate_critical_runtime_gates() -> None:
         "never as a fake permission error"
     )
     require(
-        "src/frontend/pages/settings.tsx",
-        "Cloudflare Bağlantısı",
-        "WhatsApp / Meta Bağlantısı",
-        "Bağlantı Bilgisini Güncelle",
-        "Bağlantıyı Kaldır",
-        "D1, R2 ve müşteri verileri silinmez"
-    )
+    "src/frontend/pages/settings.tsx",
+    "WPAI Cihaz Bağlantısı",
+    "WhatsApp / Meta Bağlantısı",
+    "Cihaz Bağlantısını Doğrula",
+    "Bu Cihazın Bağlantısını Kaldır",
+    "D1, R2 ve müşteri verileri silinmez"
+)
+forbid(
+    "src/frontend/pages/settings.tsx",
+    "name=\"apiToken\"",
+    "Yeni Cloudflare API Token",
+    "Cloudflare User veya Account API Token"
+)
+require("migrations/0010_desktop_activation_tokens.sql", "desktop_activation_tokens", "bound_device_hash", "expires_at")
+require("src/worker/desktopAuth.ts", "/desktop/activate", "DESKTOP_ACTIVATION_BOUND", "desktop_activation_tokens")
+require("tests/worker/device-activation.test.ts", "same installer ticket", "expired installer ticket")
     require("src/frontend/api.ts", "ensureDesktopOnline", "Çevrimdışıyken veri değiştirilemez")
     require("src/frontend/pages/desktopIndex.tsx", "faissSearchText")
     require("src/worker/trainingApi.ts", "/impact-preview", "training.impact_preview", "simulateTrainingAnswer")
@@ -138,15 +148,20 @@ def validate_critical_runtime_gates() -> None:
     require(
         "tests/e2e/offline-desktop.spec.mjs",
         "offline startup stays in Settings",
-        "removing a saved connection keeps it removed",
+        "removing a saved device connection keeps it removed",
         "Yerel Bilgi Modu",
-        "Cloudflare Account ID"
+        "Cloudflare Account ID",
+        "input[name=\"apiToken\"]"
     )
 
 
 def validate_security_and_scope() -> None:
     package = json.loads(text("package.json"))
     lock = json.loads(text("package-lock.json"))
+    if package.get("overrides", {}).get("nanoid") != "3.3.18":
+        raise AssertionError("Patched Nano ID override is not pinned")
+    if lock.get("packages", {}).get("node_modules/nanoid", {}).get("version") != "3.3.18":
+        raise AssertionError("package-lock.json does not contain patched nanoid 3.3.18")
     if package.get("overrides", {}).get("undici") != "7.29.0":
         raise AssertionError("Patched Undici override is not pinned")
     if lock.get("packages", {}).get("node_modules/undici", {}).get("version") != "7.29.0":

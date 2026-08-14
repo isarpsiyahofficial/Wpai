@@ -422,29 +422,28 @@ test('critical administrator workflows remain usable with production-sized conte
   await expect(page.locator('.console-messages')).toContainText('kesin fiyat vermeyeceğim');
 
   await page.getByRole('button', { name: 'Ayarlar', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Cloudflare Bağlantısı' })).toBeVisible();
-  await expect(page.getByText('Cloudflare hesap bağlantısı WPAI Windows uygulamasındaki Ayarlar bölümünden yönetilir.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'WPAI Cihaz Bağlantısı' })).toBeVisible();
+  await expect(page.getByText('Cihaz bağlantısı yalnız WPAI Windows uygulamasında kullanılır.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'WhatsApp / Meta Bağlantısı' })).toBeVisible();
   await page.getByRole('button', { name: 'Bağlantıyı Doğrula', exact: true }).click();
   await expect(page.locator('.toast.success')).toContainText('Meta bağlantısı doğrulandı');
   await expect(page.getByLabel('Sınırlı Cloudflare API Token', { exact: true })).toHaveCount(0);
+  await expect(page.locator('input[name=\"apiToken\"]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Tam Sistem Taraması', exact: true })).toHaveCount(0);
   await expect(page.locator('.infra-grid')).toHaveCount(0);
   await assertLayout(page, 'critical workflows/settings');
 });
 
-test('setup and login screens are responsive on the narrowest supported phone', async ({ page }) => {
+test('credential-free device connection stays responsive on the narrowest supported phone', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
-  await installMocks(page, { auth: 'setup' });
+  await installMocks(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'İlk Yönetici Kurulumu' })).toBeVisible();
-  await assertLayout(page, 'setup/320');
-
-  await page.unroute('**/*');
-  await installMocks(page, { auth: 'login' });
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'WPAI Yönetim Paneli' })).toBeVisible();
-  await assertLayout(page, 'login/320');
+  await page.getByRole('button', { name: 'Ayarlar', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'WPAI Cihaz Bağlantısı' })).toBeVisible();
+  await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'İlk Yönetici Kurulumu' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Giriş Yap' })).toHaveCount(0);
+  await assertLayout(page, 'credential-free device connection/320');
 });
 
 test('API failure produces a readable error state without breaking layout', async ({ page }) => {
