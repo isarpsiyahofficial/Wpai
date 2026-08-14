@@ -79,32 +79,33 @@ def validate_versions_and_brand() -> None:
 def validate_critical_runtime_gates() -> None:
     require("src-tauri/src/main.rs", 'windows_subsystem = "windows"')
     require("src-tauri/src/lib.rs", "faiss_search_text", '"search-text"', "tauri_plugin_single_instance::init")
+    require("src-tauri/build.rs", "rerun-if-env-changed=WPAI_DESKTOP_ACTIVATION_TOKEN")
     require("sidecar/faiss_service.py", "TEXT_INDEX_VERSION", "text_vector", "search_text", 'text-index.faiss')
     require("sidecar/test_faiss_service.py", "offline_text_search", "TEXT_INDEX_REBUILD_REQUIRED")
 
     require(
-    "src/frontend/App.tsx",
-    "phase: 'connections'",
-    "DesktopConnectionsPage",
-    "cloudflareConnectionStatus",
-    "restoreDesktopSession",
-    "Cihaz Bağlantısını Yeniden Dene",
-    "kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden"
-)
-forbid(
-    "src/frontend/App.tsx",
-    "phase: 'offline'",
-    "OfflineDesktopPage",
-    "Yerel Bilgi Modu",
-    "Buluta Yeniden Bağlan",
-    "Cloudflare Kurulumu ve Onarımı",
-    "Yönetici e-postası<input",
-    "Yeni parola<input",
-    "Parola tekrarı<input",
-    "Panele Giriş Yap",
-    "name=\"apiToken\"",
-    "Cloudflare User veya Account API Token"
-)
+        "src/frontend/App.tsx",
+        "phase: 'connections'",
+        "DesktopConnectionsPage",
+        "cloudflareConnectionStatus",
+        "restoreDesktopSession",
+        "Cihaz Bağlantısını Yeniden Dene",
+        "kullanıcı adı, e-posta, parola veya Cloudflare API tokeni istemeden"
+    )
+    forbid(
+        "src/frontend/App.tsx",
+        "phase: 'offline'",
+        "OfflineDesktopPage",
+        "Yerel Bilgi Modu",
+        "Buluta Yeniden Bağlan",
+        "Cloudflare Kurulumu ve Onarımı",
+        "Yönetici e-postası<input",
+        "Yeni parola<input",
+        "Parola tekrarı<input",
+        "Panele Giriş Yap",
+        'name="apiToken"',
+        "Cloudflare User veya Account API Token"
+    )
     require(
         "desktop-bootstrap/bootstrap-v6.mjs",
         "device-bootstrap-v6",
@@ -119,23 +120,23 @@ forbid(
         "never as a fake permission error"
     )
     require(
-    "src/frontend/pages/settings.tsx",
-    "WPAI Cihaz Bağlantısı",
-    "WhatsApp / Meta Bağlantısı",
-    "Cihaz Bağlantısını Doğrula",
-    "Bu Cihazın Bağlantısını Kaldır",
-    "D1, R2 ve müşteri verileri silinmez"
-)
-forbid(
-    "src/frontend/pages/settings.tsx",
-    "name=\"apiToken\"",
-    "Yeni Cloudflare API Token",
-    "Cloudflare User veya Account API Token"
-)
-require("migrations/0010_desktop_activation_tokens.sql", "desktop_activation_tokens", "bound_device_hash", "expires_at")
-require("src/worker/desktopAuth.ts", "/desktop/activate", "DESKTOP_ACTIVATION_BOUND", "desktop_activation_tokens")
-require("tests/worker/device-activation.test.ts", "same installer ticket", "expired installer ticket")
-    require("src/frontend/api.ts", "ensureDesktopOnline", "Çevrimdışıyken veri değiştirilemez")
+        "src/frontend/pages/settings.tsx",
+        "WPAI Cihaz Bağlantısı",
+        "WhatsApp / Meta Bağlantısı",
+        "Cihaz Bağlantısını Doğrula",
+        "Bu Cihazın Bağlantısını Kaldır",
+        "D1, R2 ve müşteri verileri silinmez"
+    )
+    forbid(
+        "src/frontend/pages/settings.tsx",
+        'name="apiToken"',
+        "Yeni Cloudflare API Token",
+        "Cloudflare User veya Account API Token"
+    )
+    require("migrations/0010_desktop_activation_tokens.sql", "desktop_activation_tokens", "bound_device_hash", "expires_at")
+    require("src/worker/desktopAuth.ts", "/desktop/activate", "DESKTOP_ACTIVATION_BOUND", "desktop_activation_tokens")
+    require("tests/worker/device-activation.test.ts", "same installer ticket", "expired installer ticket")
+    require("src/frontend/api.ts", "activateInstallerSession", "/api/auth/desktop/activate", "ensureDesktopOnline", "Çevrimdışıyken veri değiştirilemez")
     require("src/frontend/pages/desktopIndex.tsx", "faissSearchText")
     require("src/worker/trainingApi.ts", "/impact-preview", "training.impact_preview", "simulateTrainingAnswer")
     require("src/frontend/pages/training.tsx", "Canlı AI’a Etkisi", "Mevcut canlı cevap", "Taslak yayınlanırsa olası cevap")
@@ -151,8 +152,15 @@ require("tests/worker/device-activation.test.ts", "same installer ticket", "expi
         "removing a saved device connection keeps it removed",
         "Yerel Bilgi Modu",
         "Cloudflare Account ID",
-        "input[name=\"apiToken\"]"
+        'input[name="apiToken"]'
     )
+    require(
+        "tests/e2e/auth-regression.spec.mjs",
+        "first launch activates the Windows device automatically",
+        "invalid installer activation",
+        'not.toHaveProperty(\'apiToken\')'
+    )
+    require("scripts/verify-installed-webview.mjs", "Gösterge Paneli", "WPAI Cihaz Bağlantısı", "cloudflareCredentialInputs: 0")
 
 
 def validate_security_and_scope() -> None:
@@ -187,7 +195,7 @@ def main() -> None:
     validate_versions_and_brand()
     validate_critical_runtime_gates()
     validate_security_and_scope()
-    print("500/500 evidence validation passed: Cloudflare connection remains Settings-only and desktop onboarding is passwordless while all security and runtime gates remain present.")
+    print("500/500 evidence validation passed: Cloudflare connection remains Settings-only and desktop onboarding is credential-free while all security and runtime gates remain present.")
 
 
 if __name__ == "__main__":
