@@ -17,6 +17,14 @@ export type DesktopSession = {
   refreshExpiresAt: string;
 };
 
+type DesktopConnectionBootstrap = {
+  configured: boolean;
+  accountId: string;
+  storage: string;
+  mode?: string;
+  activationToken?: string | null;
+};
+
 export function setCsrfToken(value: string): void { csrfToken = value; }
 export function getCsrfToken(): string { return csrfToken; }
 export function isDesktop(): boolean { return desktop.available(); }
@@ -63,13 +71,13 @@ async function publicDesktopRequest<T>(path: string, payload?: unknown): Promise
   return parseJson<T>(await fetch(apiUrl(path), init));
 }
 
-export async function desktopLogin(email: string, password: string): Promise<DesktopSession> {
-  if (!navigator.onLine) throw new Error('Çevrimdışıyken bulut hesabına giriş yapılamaz.');
-  if (!desktop.available()) throw new Error('Masaüstü oturumu yalnız Windows uygulamasında kullanılabilir.');
-  const deviceId = await desktop.getOrCreateDeviceId();
-  const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/login', {
-    email,
-    password,
+async function activateInstallerSession(deviceId: string): Promise<DesktopSession> {
+  if (!navigator.onLine) throw new Error('İnternet bağlantısı yok. Cihaz oturumu oluşturulamıyor.');
+  const connection = await desktop.cloudflareConnectionStatus() as DesktopConnectionBootstrap;
+  const activationToken = connection.activationToken?.trim();
+  if (!activationToken) throw new Error('Bu kurulum için otomatik cihaz etkinleştirmesi bulunamadı.');
+  const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/activate', {
+    activationToken,
     deviceId,
     deviceName: navigator.userAgent.includes('Windows') ? 'WPAI Windows' : 'WPAI Desktop',
     appVersion: '1.3.6'
@@ -91,18 +99,22 @@ export async function restoreDesktopSession(): Promise<DesktopSession> {
   if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    const refreshToken = await desktop.loadRefreshToken();
-    if (!refreshToken) throw new Error('Kayıtlı masaüstü oturumu yok.');
     const deviceId = await desktop.getOrCreateDeviceId();
+    const refreshToken = await desktop.loadRefreshToken();
+    if (!refreshToken) return activateInstallerSession(deviceId);
     try {
       const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/refresh', { refreshToken, deviceId });
       await desktop.saveRefreshToken(session.refreshToken);
       applyDesktopSession(session);
       return session;
-    } catch (error) {
+    } catch (refreshError) {
       clearDesktopMemory();
       await desktop.removeRefreshToken().catch(() => undefined);
-      throw error;
+      try {
+        return await activateInstallerSession(deviceId);
+      } catch {
+        throw refreshError;
+      }
     }
   })().finally(() => { refreshPromise = null; });
   return refreshPromise;
