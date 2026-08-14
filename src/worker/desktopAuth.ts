@@ -3,12 +3,11 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import type { AppContext } from './types';
 import { audit, first, nowIso, run } from './db';
-import { randomToken, sha256, verifyPassword } from './crypto';
+import { randomToken, sha256 } from './crypto';
 import { fail, ok } from './http';
 
-const DesktopLoginSchema = z.object({
-  email: z.string().email().max(254),
-  password: z.string().min(1).max(500),
+const ActivationSchema = z.object({
+  activationToken: z.string().min(40).max(500),
   deviceId: z.string().min(20).max(500),
   deviceName: z.string().trim().min(2).max(160),
   appVersion: z.string().trim().max(40).optional()
@@ -23,36 +22,76 @@ const REFRESH_SECONDS = 60 * 60 * 24 * 30;
 
 export const desktopAuthRoutes = new Hono<AppContext>();
 
-desktopAuthRoutes.post('/desktop/login', zValidator('json', DesktopLoginSchema), async c => {
+desktopAuthRoutes.post('/desktop/activate', zValidator('json', ActivationSchema), async c => {
   const input = c.req.valid('json');
-  const email = input.email.toLowerCase();
-  const ipInput = c.req.header('CF-Connecting-IP') ?? 'unknown';
-  const [emailHash, ipHash] = await Promise.all([sha256(email), sha256(ipInput)]);
-  const since = new Date(Date.now() - 15 * 60_000).toISOString();
-  const attempts = await first<{ count: number }>(c.env.DB,
-    `SELECT COUNT(*) AS count FROM login_attempts
-      WHERE email_hash=? AND ip_hash=? AND success=0 AND created_at>?`, emailHash, ipHash, since);
-  if ((attempts?.count ?? 0) >= 8) return fail(c, 'LOGIN_RATE_LIMITED', 'Çok fazla başarısız deneme. Daha sonra tekrar deneyin.', 429);
+  const now = nowIso();
+  const [tokenHash, deviceHash] = await Promise.all([
+    sha256(input.activationToken),
+    sha256(input.deviceId)
+  ]);
 
-  const admin = await first<{
-    id: string; name: string; email: string; role: string; password_hash: string;
-    status: string; locked_until: string | null;
+  let ticket = await first<{
+    id: string;
+    bound_device_hash: string | null;
+    status: string;
+    expires_at: string;
   }>(c.env.DB,
-    `SELECT id,name,email,role,password_hash,status,locked_until FROM admins
-      WHERE email=? AND deleted_at IS NULL LIMIT 1`, email);
-  const valid = admin ? await verifyPassword(input.password, admin.password_hash) : false;
-  await run(c.env.DB,
-    `INSERT INTO login_attempts (id,email_hash,ip_hash,success,created_at) VALUES (?,?,?,?,?)`,
-    crypto.randomUUID(), emailHash, ipHash, valid ? 1 : 0, nowIso());
-  if (!admin || !valid || admin.status !== 'active' || (admin.locked_until && admin.locked_until > nowIso())) {
-    return fail(c, 'LOGIN_FAILED', 'E-posta veya parola hatalı.', 401);
+    `SELECT id,bound_device_hash,status,expires_at
+       FROM desktop_activation_tokens
+      WHERE token_hash=? LIMIT 1`, tokenHash);
+
+  if (!ticket || ticket.status !== 'active' || ticket.expires_at <= now) {
+    return fail(c, 'DESKTOP_ACTIVATION_INVALID', 'Bu kurulumun güvenli cihaz etkinleştirmesi geçersiz veya süresi dolmuş.', 401);
+  }
+  if (ticket.bound_device_hash && ticket.bound_device_hash !== deviceHash) {
+    return fail(c, 'DESKTOP_ACTIVATION_BOUND', 'Bu kurulum başka bir cihaza etkinleştirilmiş.', 403);
   }
 
-  const deviceHash = await sha256(input.deviceId);
-  const now = nowIso();
+  if (!ticket.bound_device_hash) {
+    const bound = await c.env.DB.prepare(
+      `UPDATE desktop_activation_tokens
+          SET bound_device_hash=?,first_used_at=COALESCE(first_used_at,?),last_used_at=?,use_count=use_count+1
+        WHERE id=? AND bound_device_hash IS NULL AND status='active' AND expires_at>?`
+    ).bind(deviceHash, now, now, ticket.id, now).run();
+    if ((bound.meta?.changes ?? 0) !== 1) {
+      ticket = await first<{
+        id: string;
+        bound_device_hash: string | null;
+        status: string;
+        expires_at: string;
+      }>(c.env.DB,
+        `SELECT id,bound_device_hash,status,expires_at
+           FROM desktop_activation_tokens
+          WHERE token_hash=? LIMIT 1`, tokenHash);
+      if (!ticket || ticket.status !== 'active' || ticket.expires_at <= now || ticket.bound_device_hash !== deviceHash) {
+        return fail(c, 'DESKTOP_ACTIVATION_RACE_REJECTED', 'Cihaz etkinleştirmesi güvenli biçimde tamamlanamadı.', 409);
+      }
+    }
+  } else {
+    await run(c.env.DB,
+      'UPDATE desktop_activation_tokens SET last_used_at=?,use_count=use_count+1 WHERE id=?',
+      now, ticket.id);
+  }
+
+  const admin = await first<{
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+  }>(c.env.DB,
+    `SELECT id,name,email,role
+       FROM admins
+      WHERE role='owner' AND status='active' AND deleted_at IS NULL
+      ORDER BY created_at ASC LIMIT 1`);
+  if (!admin) {
+    return fail(c, 'DESKTOP_OWNER_MISSING', 'WPAI işletme sahibi kaydı bulunamadı.', 503);
+  }
+
   let device = await first<{ id: string; status: string }>(c.env.DB,
-    'SELECT id,status FROM desktop_devices WHERE admin_id=? AND device_hash=?', admin.id, deviceHash);
-  if (device?.status === 'revoked') return fail(c, 'DESKTOP_DEVICE_REVOKED', 'Bu masaüstü cihazının erişimi iptal edilmiş.', 403);
+    'SELECT id,status FROM desktop_devices WHERE admin_id=? AND device_hash=? LIMIT 1', admin.id, deviceHash);
+  if (device?.status === 'revoked') {
+    return fail(c, 'DESKTOP_DEVICE_REVOKED', 'Bu masaüstü cihazının erişimi iptal edilmiş.', 403);
+  }
   if (!device) {
     device = { id: crypto.randomUUID(), status: 'active' };
     await run(c.env.DB,
@@ -62,14 +101,36 @@ desktopAuthRoutes.post('/desktop/login', zValidator('json', DesktopLoginSchema),
       device.id, admin.id, deviceHash, input.deviceName, input.appVersion ?? null, now, now);
   } else {
     await run(c.env.DB,
-      `UPDATE desktop_devices SET display_name=?,app_version=?,last_seen_at=? WHERE id=?`,
+      `UPDATE desktop_devices
+          SET display_name=?,platform='windows',app_version=?,status='active',last_seen_at=?,revoked_at=NULL
+        WHERE id=?`,
       input.deviceName, input.appVersion ?? null, now, device.id);
   }
 
-  const credentials = await createDesktopCredentials(c.env.DB, admin.id, device.id, c.req.header('User-Agent') ?? '', ipInput);
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE admin_sessions SET revoked_at=?
+        WHERE id IN (
+          SELECT admin_session_id FROM desktop_sessions
+           WHERE device_id=? AND admin_session_id IS NOT NULL AND revoked_at IS NULL
+        ) AND revoked_at IS NULL`
+    ).bind(now, device.id),
+    c.env.DB.prepare(
+      'UPDATE desktop_sessions SET revoked_at=? WHERE device_id=? AND revoked_at IS NULL'
+    ).bind(now, device.id)
+  ]);
+
+  const credentials = await createDesktopCredentials(
+    c.env.DB,
+    admin.id,
+    device.id,
+    c.req.header('User-Agent') ?? '',
+    c.req.header('CF-Connecting-IP') ?? 'unknown'
+  );
   await run(c.env.DB, 'UPDATE admins SET last_login_at=?,updated_at=? WHERE id=?', now, now, admin.id);
-  await audit(c.env.DB, admin.id, 'desktop.login', 'desktop_device', device.id,
-    { appVersion: input.appVersion ?? null }, c.get('requestId'));
+  await audit(c.env.DB, admin.id, 'desktop.device_activated', 'desktop_device', device.id,
+    { appVersion: input.appVersion ?? null, activationTicketId: ticket.id }, c.get('requestId'));
+
   return ok(c, {
     admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
     deviceId: device.id,
