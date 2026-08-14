@@ -164,7 +164,7 @@ test('first launch activates the Windows device automatically with no user crede
   await page.goto('/');
 
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Gösterge Paneli' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Gösterge Paneli', exact: true })).toBeVisible();
   await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
   await expect(page.getByLabel(/e-posta/i)).toHaveCount(0);
   await expect(page.getByLabel(/^parola$/i)).toHaveCount(0);
@@ -176,9 +176,9 @@ test('first launch uses an existing Wrangler OAuth session and opens the panel w
   await page.goto('/');
 
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'WhatsApp' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'WhatsApp', exact: true })).toBeVisible();
   await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Giriş Yap' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Giriş Yap', exact: true })).toHaveCount(0);
   await expect(page.getByLabel(/e-posta/i)).toHaveCount(0);
 });
 
@@ -187,13 +187,13 @@ test('when Wrangler OAuth is absent the app offers browser OAuth, never an API t
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: 'WPAI Cihaz Bağlantısı' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Cloudflare Oturumunu Aç' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cloudflare Oturumunu Aç', exact: true })).toBeVisible();
   await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
   await expect(page.getByText('Cloudflare User veya Account API Token')).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Cloudflare Oturumunu Aç' }).click();
+  await page.getByRole('button', { name: 'Cloudflare Oturumunu Aç', exact: true }).click();
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Gösterge Paneli' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Gösterge Paneli', exact: true })).toBeVisible();
 });
 
 test('an expired installer activation falls through to Wrangler OAuth rather than asking for Cloudflare credentials', async ({ page }) => {
@@ -231,6 +231,6 @@ test('an expired installer activation falls through to Wrangler OAuth rather tha
   await page.goto('/');
 
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Gösterge Paneli' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Gösterge Paneli', exact: true })).toBeVisible();
   await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
 });
