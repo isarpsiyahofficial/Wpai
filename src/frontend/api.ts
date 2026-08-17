@@ -3,6 +3,7 @@ import type { Admin } from './types';
 import { desktop } from './desktop';
 
 const DESKTOP_API_BASE = 'https://wa-ai-panel.wa-ai-panel.workers.dev';
+const DESKTOP_REQUEST_TIMEOUT_MS = 8_000;
 let csrfToken = '';
 let desktopAccessToken = '';
 let desktopAccessExpiresAt = 0;
@@ -67,16 +68,28 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 async function publicDesktopRequest<T>(path: string, payload?: unknown): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), DESKTOP_REQUEST_TIMEOUT_MS);
   const init: RequestInit = {
     method: payload === undefined ? 'GET' : 'POST',
     credentials: 'omit',
-    cache: 'no-store'
+    cache: 'no-store',
+    signal: controller.signal
   };
   if (payload !== undefined) {
     init.headers = { 'Content-Type': 'application/json' };
     init.body = JSON.stringify(payload);
   }
-  return parseJson<T>(await fetch(apiUrl(path), init));
+  try {
+    return parseJson<T>(await fetch(apiUrl(path), init));
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Bulut bağlantısı zaman aşımına uğradı.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 async function activateInstallerSession(deviceId: string): Promise<DesktopSession> {
@@ -115,27 +128,38 @@ async function bootstrapNewDesktopSession(deviceId: string): Promise<DesktopSess
   }
 }
 
+async function restoreSavedDesktopSession(): Promise<DesktopSession> {
+  const deviceId = await desktop.getOrCreateDeviceId();
+  const refreshToken = await desktop.loadRefreshToken();
+  if (!refreshToken) throw new Error('DEVICE_SESSION_REQUIRED');
+  try {
+    const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/refresh', { refreshToken, deviceId });
+    return await persistDesktopSession(session);
+  } catch (error) {
+    clearDesktopMemory();
+    await desktop.removeRefreshToken().catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function activateDesktopBootstrapSession(refreshToken: string): Promise<DesktopSession> {
   if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
   if (typeof refreshToken !== 'string' || refreshToken.length < 32) throw new Error('Cloudflare cihaz oturumu geçersiz.');
   clearDesktopMemory();
   await desktop.saveRefreshToken(refreshToken);
-  return restoreDesktopSession();
+  return restoreDesktopSession({ allowBootstrap: false });
 }
 
-export async function restoreDesktopSession(): Promise<DesktopSession> {
+export async function restoreDesktopSession(options: { allowBootstrap?: boolean } = {}): Promise<DesktopSession> {
   if (!desktop.available()) throw new Error('Masaüstü oturumu kullanılamıyor.');
+  const allowBootstrap = options.allowBootstrap ?? true;
+  if (!allowBootstrap) return restoreSavedDesktopSession();
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    const deviceId = await desktop.getOrCreateDeviceId();
-    const refreshToken = await desktop.loadRefreshToken();
-    if (!refreshToken) return bootstrapNewDesktopSession(deviceId);
     try {
-      const session = await publicDesktopRequest<DesktopSession>('/api/auth/desktop/refresh', { refreshToken, deviceId });
-      return await persistDesktopSession(session);
+      return await restoreSavedDesktopSession();
     } catch {
-      clearDesktopMemory();
-      await desktop.removeRefreshToken().catch(() => undefined);
+      const deviceId = await desktop.getOrCreateDeviceId();
       return bootstrapNewDesktopSession(deviceId);
     }
   })().finally(() => { refreshPromise = null; });
