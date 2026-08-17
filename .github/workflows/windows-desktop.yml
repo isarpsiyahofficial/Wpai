@@ -28,7 +28,7 @@ jobs:
   installer:
     name: Build, install and verify NSIS setup.exe
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,6 +46,9 @@ jobs:
       - name: Install locked JavaScript dependencies
         shell: pwsh
         run: npm ci --no-audit --no-fund
+      - name: Run fast first-run OAuth regression
+        shell: pwsh
+        run: npm run test:oauth
       - name: Install FAISS sidecar dependencies
         shell: pwsh
         run: |
@@ -84,24 +87,26 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $bootstrap = Join-Path $PWD 'desktop-bootstrap'
           $runtime = Join-Path $bootstrap 'runtime'
+          $wranglerRuntime = Join-Path $runtime 'wrangler'
           $project = Join-Path $bootstrap 'project'
           Remove-Item $runtime, $project -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $runtime, $project | Out-Null
+          New-Item -ItemType Directory -Force -Path $runtime, $wranglerRuntime, $project | Out-Null
 
           $nodeExe = (Get-Command node).Source
-          $nodeHome = Split-Path -Parent $nodeExe
           Copy-Item $nodeExe (Join-Path $runtime 'node.exe')
-          New-Item -ItemType Directory -Force -Path (Join-Path $runtime 'node_modules') | Out-Null
-          Copy-Item (Join-Path $nodeHome 'node_modules\npm') (Join-Path $runtime 'node_modules\npm') -Recurse
+
+          # First launch must never execute npm install/ci. Package the exact node_modules tree produced by locked npm ci.
+          Copy-Item (Join-Path $PWD 'node_modules') (Join-Path $wranglerRuntime 'node_modules') -Recurse
 
           $files = @('package.json','package-lock.json','wrangler.jsonc','index.html','vite.config.ts','tsconfig.base.json','tsconfig.frontend.json','tsconfig.worker.json','tsconfig.json')
           foreach ($file in $files) { Copy-Item (Join-Path $PWD $file) (Join-Path $project $file) }
           Copy-Item (Join-Path $PWD 'src') (Join-Path $project 'src') -Recurse
           Copy-Item (Join-Path $PWD 'migrations') (Join-Path $project 'migrations') -Recurse
 
-          if (-not (Test-Path (Join-Path $bootstrap 'bootstrap.mjs'))) { throw 'Cloudflare bootstrap script missing' }
+          $wranglerBin = Join-Path $wranglerRuntime 'node_modules\wrangler\bin\wrangler.js'
+          if (-not (Test-Path (Join-Path $bootstrap 'oauth-device-bootstrap.mjs'))) { throw 'OAuth bootstrap script missing' }
           if (-not (Test-Path (Join-Path $runtime 'node.exe'))) { throw 'Packaged Node runtime missing' }
-          if (-not (Test-Path (Join-Path $runtime 'node_modules\npm\bin\npm-cli.js'))) { throw 'Packaged npm runtime missing' }
+          if (-not (Test-Path $wranglerBin)) { throw 'Packaged Wrangler runtime missing' }
           if (-not (Test-Path (Join-Path $project 'wrangler.jsonc'))) { throw 'Packaged Wrangler project missing' }
       - name: Build NSIS installer
         shell: pwsh
@@ -175,13 +180,15 @@ jobs:
           $peSubsystem = [BitConverter]::ToUInt16($peBytes, $optionalHeaderOffset + 68)
           if ($peSubsystem -ne 2) { throw "Installed application is not Windows GUI subsystem; subsystem=$peSubsystem" }
 
-          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'oauth-device-bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $bootstrapNode = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          $bootstrapWrangler = Get-ChildItem -Path $installLocation -Filter 'wrangler.js' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap.*runtime.*wrangler.*node_modules.*wrangler.*bin' } | Select-Object -First 1
           $bootstrapProject = Get-ChildItem -Path $installLocation -Filter 'wrangler.jsonc' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
-          if (-not $bootstrapScript -or -not $bootstrapNode -or -not $bootstrapProject) {
-            throw 'Installed Cloudflare first-run bootstrap resources are incomplete'
+          if (-not $bootstrapScript -or -not $bootstrapNode -or -not $bootstrapWrangler -or -not $bootstrapProject) {
+            throw 'Installed fast Cloudflare OAuth bootstrap resources are incomplete'
           }
 
           $first = Start-Process -FilePath $installed.FullName -PassThru
@@ -197,13 +204,16 @@ jobs:
           $dataDir = Join-Path $env:APPDATA 'com.wpai.desktop'
           $faissCache = Join-Path $dataDir 'faiss-index'
           $bootstrapCache = Join-Path $dataDir 'cloudflare-bootstrap'
-          New-Item -ItemType Directory -Force -Path $faissCache, $bootstrapCache | Out-Null
+          $oauthCache = Join-Path $dataDir 'cloudflare-oauth-bootstrap'
+          New-Item -ItemType Directory -Force -Path $faissCache, $bootstrapCache, $oauthCache | Out-Null
           $marker = Join-Path $dataDir 'uninstall-preserve-marker.txt'
           $faissMarker = Join-Path $faissCache 'cache-marker.txt'
           $bootstrapMarker = Join-Path $bootstrapCache 'cache-marker.txt'
+          $oauthMarker = Join-Path $oauthCache 'cache-marker.txt'
           Set-Content -Path $marker -Value 'preserve-user-data'
           Set-Content -Path $faissMarker -Value 'preserve-local-index-by-default'
           Set-Content -Path $bootstrapMarker -Value 'preserve-bootstrap-cache-by-default'
+          Set-Content -Path $oauthMarker -Value 'preserve-oauth-cache-by-default'
 
           Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
           Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
@@ -220,7 +230,7 @@ jobs:
           Start-Sleep -Seconds 3
           if (Test-Path $installed.FullName) { throw 'Installed application executable remained after uninstall' }
           if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
-          if (-not (Test-Path $faissMarker) -or -not (Test-Path $bootstrapMarker)) { throw 'Silent uninstall removed local cache without explicit purge choice' }
+          if (-not (Test-Path $faissMarker) -or -not (Test-Path $bootstrapMarker) -or -not (Test-Path $oauthMarker)) { throw 'Silent uninstall removed local cache without explicit purge choice' }
 
           $reinstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
           if ($reinstall.ExitCode -ne 0) { throw "NSIS silent reinstall failed: $($reinstall.ExitCode)" }
@@ -232,6 +242,7 @@ jobs:
           if (-not (Test-Path $marker)) { throw 'Purge option removed non-cache user data' }
           if (Test-Path $faissCache) { throw 'Purge option did not remove the local education index cache' }
           if (Test-Path $bootstrapCache) { throw 'Purge option did not remove the Cloudflare bootstrap cache' }
+          if (Test-Path $oauthCache) { throw 'Purge option did not remove the Cloudflare OAuth cache' }
 
           [ordered]@{
             checkedAt = (Get-Date).ToUniversalTime().ToString('o')
@@ -247,14 +258,16 @@ jobs:
             peSubsystemName = 'Windows GUI'
             cloudflareBootstrapScript = $bootstrapScript.FullName
             cloudflareBootstrapNode = $bootstrapNode.FullName
+            cloudflareBootstrapWrangler = $bootstrapWrangler.FullName
             cloudflareBootstrapProject = $bootstrapProject.FullName
+            runtimeNpmInstallRequired = $false
             firstInstanceAlive = $true
             processCountAfterSecondLaunch = $running.Count
             uninstallExitCode = $uninstall.ExitCode
             userDataPreserved = (Test-Path $marker)
             silentUninstallPreservedLocalCache = $true
             purgeUninstallExitCode = $purge.ExitCode
-            purgeOptionRemovedLocalCache = (-not (Test-Path $faissCache) -and -not (Test-Path $bootstrapCache))
+            purgeOptionRemovedLocalCache = (-not (Test-Path $faissCache) -and -not (Test-Path $bootstrapCache) -and -not (Test-Path $oauthCache))
             cloudDataUntouchedByLocalUninstaller = $true
             headSha = '${{ github.sha }}'
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 windows-smoke.json
