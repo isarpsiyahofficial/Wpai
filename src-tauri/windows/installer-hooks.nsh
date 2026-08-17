@@ -19,8 +19,10 @@
   wpai_purge_local_cache:
     RMDir /r "$APPDATA\com.wpai.desktop\faiss-index"
     RMDir /r "$APPDATA\com.wpai.desktop\cloudflare-bootstrap"
+    RMDir /r "$APPDATA\com.wpai.desktop\cloudflare-oauth-bootstrap"
     RMDir /r "$LOCALAPPDATA\com.wpai.desktop\faiss-index"
     RMDir /r "$LOCALAPPDATA\com.wpai.desktop\cloudflare-bootstrap"
+    RMDir /r "$LOCALAPPDATA\com.wpai.desktop\cloudflare-oauth-bootstrap"
 
   wpai_keep_local_cache:
 !macroend
