@@ -304,8 +304,7 @@ function DesktopConnectionsPage({
   useEffect(() => {
     if (!online || autoAttempted) return;
     setAutoAttempted(true);
-    const timer = window.setTimeout(() => { void retryAutomaticConnection(); }, 100);
-    return () => window.clearTimeout(timer);
+    void retryAutomaticConnection();
   }, [autoAttempted, online]);
 
   async function openOauthLogin() {
