@@ -196,6 +196,32 @@ test('when Wrangler OAuth is absent the app offers browser OAuth, never an API t
   await expect(page.getByRole('button', { name: 'Gösterge Paneli', exact: true })).toBeVisible();
 });
 
+test('slow automatic first-run never traps the app on the fullscreen connection loader', async ({ page }) => {
+  await page.addInitScript(deviceId => {
+    window.__TAURI_INTERNALS__ = {
+      invoke: async command => {
+        if (command === 'cloudflare_connection_status') return { configured: false, accountId: 'hidden', storage: 'Windows Credential Manager', mode: 'none', activationToken: null };
+        if (command === 'get_or_create_device_id') return deviceId;
+        if (command === 'load_desktop_refresh_token') return null;
+        if (command === 'cloudflare_auto_bootstrap') return await new Promise(() => undefined);
+        if (command === 'show_desktop_notification') return null;
+        throw new Error(`Unexpected desktop command: ${command}`);
+      },
+      transformCallback: () => 1,
+      unregisterCallback: () => undefined,
+      convertFileSrc: value => value,
+      metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } }
+    };
+  }, DEVICE_ID);
+  await installApiMocks(page);
+  await page.goto('/');
+
+  await expect(page.getByRole('heading', { name: 'WPAI Cihaz Bağlantısı' })).toBeVisible({ timeout: 3000 });
+  await expect(page.getByText('Kayıtlı cihaz oturumu kontrol ediliyor…')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Bağlanıyor…', exact: true })).toBeVisible();
+  await expect(page.locator('input[name="apiToken"]')).toHaveCount(0);
+});
+
 test('an expired installer activation falls through to Wrangler OAuth rather than asking for Cloudflare credentials', async ({ page }) => {
   await page.addInitScript(({ deviceId, activationToken, refresh }) => {
     let storedRefresh = null;

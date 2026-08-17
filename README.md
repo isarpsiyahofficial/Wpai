@@ -62,7 +62,7 @@ Bu manifest uygulamanın iç doğrulama ve dağıtım sınırıdır. Account ID,
 1. WPAI açıldığında önce Windows Credential Manager’daki mevcut WPAI refresh oturumunu dener.
 2. Geçerli refresh oturumu yoksa paketlenmiş Wrangler çalışma yolu devreye girer.
 3. WPAI, stale API-token ortam değişkenlerini Wrangler alt sürecinden çıkarır ve `wrangler whoami` ile yalnız OAuth oturumunu doğrular.
-4. OAuth oturumu geçerliyse production D1 migrasyonları uygulanır, gerekli Worker sürümü deploy edilir ve cihaza bağlı kısa ömürlü aktivasyon bileti oluşturulur.
+4. OAuth oturumu geçerliyse production Worker/D1 sağlık durumu doğrulanır ve cihaza bağlı kısa ömürlü aktivasyon bileti oluşturulur. Uygulama açılışında npm kurulumu, build, migration veya deploy çalıştırılmaz.
 5. Aktivasyon bileti yalnız ilk cihaz hash’ine bağlanır; başka cihazda tekrar kullanılamaz.
 6. Worker, bu cihaz için access/refresh oturumu üretir. Refresh token Windows Credential Manager’da saklanır.
 7. OAuth oturumu yoksa WPAI form açmaz; **Cloudflare Oturumunu Aç** düğmesi resmî Cloudflare tarayıcı girişini başlatır ve tamamlanınca cihaz bağlantısı yeniden kurulur.

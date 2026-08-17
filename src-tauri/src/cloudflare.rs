@@ -301,20 +301,17 @@ fn run_engine(
 
 #[tauri::command]
 pub fn cloudflare_connection_status(app: AppHandle) -> Result<Value, String> {
-    let api_configured = load_api_token()?.is_some();
     let session_configured = has_desktop_session()?;
     let installer_activation = !activation_disabled(&app) && activation_token().is_some();
     let mode = if session_configured {
         "device_session"
-    } else if api_configured {
-        "cloudflare_api"
     } else if installer_activation {
         "installer_activation"
     } else {
         "none"
     };
     Ok(json!({
-        "configured": api_configured || session_configured || installer_activation,
+        "configured": session_configured || installer_activation,
         "accountId": ACCOUNT_ID,
         "storage": "Windows Credential Manager",
         "mode": mode,

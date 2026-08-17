@@ -9,7 +9,7 @@
 5. Geçerli cihaz oturumu yoksa paketlenmiş Wrangler çalışma yolu bu Windows kullanıcısının mevcut Cloudflare OAuth oturumunu `wrangler whoami` ile doğrular.
 6. Stale `CLOUDFLARE_API_TOKEN`, `CF_API_TOKEN` ve benzeri provider-token ortam değişkenleri onboarding alt sürecinden çıkarılır; eski/expired API token Wrangler OAuth’un önüne geçemez.
 7. Mevcut Wrangler OAuth oturumu yoksa **Cloudflare Oturumunu Aç** düğmesi Cloudflare’ın resmî tarayıcı OAuth akışını başlatır. E-posta/parola Cloudflare’ın kendi sayfasında işlenir; WPAI formuna girilmez ve WPAI tarafından saklanmaz.
-8. OAuth doğrulandıktan sonra WPAI gerekli production D1 migrasyonlarını ve Worker runtimeını doğrular/günceller, cihaza bağlı tek kullanımlık aktivasyon bileti üretir ve Worker’dan access/refresh cihaz oturumu alır.
+8. OAuth doğrulandıktan sonra WPAI production Worker/D1 sağlık durumunu doğrular, cihaza bağlı tek kullanımlık aktivasyon bileti üretir ve Worker’dan access/refresh cihaz oturumu alır. Production migration/deploy işleri masaüstü uygulaması açılırken çalıştırılmaz.
 9. Refresh token Windows Credential Manager’da saklanır. Uygulama yeniden açıldığında bağlantı otomatik yenilenir.
 10. **Bu Cihazın Bağlantısını Kaldır** yalnız bu bilgisayarın WPAI cihaz oturumunu ve yerel bağlantı kaydını kaldırır; D1, R2, Queue, Vectorize, işletme bilgileri, müşteriler ve konuşma geçmişi silinmez.
 

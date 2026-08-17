@@ -59,6 +59,18 @@ const DEFAULT_BRANDING: Branding = {
   secondary_color: '#22c7e8'
 };
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer = 0;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => { timer = window.setTimeout(() => reject(new Error(message)), timeoutMs); })
+    ]);
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
+
 export function App() {
   const desktopMode = isDesktop();
   const browserLayoutTest = !desktopMode && import.meta.env.VITE_WPAI_E2E === '1';
@@ -99,7 +111,7 @@ export function App() {
 
     let currentConnection = DEFAULT_CONNECTION;
     try {
-      currentConnection = await desktop.cloudflareConnectionStatus();
+      currentConnection = await settleWithin(desktop.cloudflareConnectionStatus(), 2500, 'Cihaz bağlantı durumu zaman aşımına uğradı.');
       setCloudflareConnection(currentConnection);
     } catch (error) {
       openConnections(DEFAULT_CONNECTION);
@@ -113,17 +125,18 @@ export function App() {
     }
 
     try {
-      const session = await restoreDesktopSession();
+      const session = await settleWithin(restoreDesktopSession({ allowBootstrap: false }), 9000, 'Kayıtlı cihaz oturumu kontrolü zaman aşımına uğradı.');
       const refreshed = await desktop.cloudflareConnectionStatus().catch(() => currentConnection);
       setCloudflareConnection(refreshed);
       setConnectionIssue('');
       setAuth({ phase: 'ready', admin: session.admin });
     } catch (error) {
-    const message = error instanceof Error ? error.message : 'Otomatik cihaz bağlantısı kurulamadı.';
-    setConnectionIssue(message);
-    openConnections(currentConnection);
-    notify(`Otomatik cihaz bağlantısı kurulamadı: ${message}`, 'error');
-  }
+      const message = error instanceof Error ? error.message : 'Kayıtlı cihaz oturumu kullanılamadı.';
+      const expectedFirstRun = message === 'DEVICE_SESSION_REQUIRED';
+      setConnectionIssue(expectedFirstRun ? '' : message);
+      openConnections(currentConnection);
+      if (!expectedFirstRun) notify(`Kayıtlı cihaz oturumu kullanılamadı: ${message}`, 'error');
+    }
   }, [browserLayoutTest, desktopMode, notify, openConnections]);
 
   useEffect(() => { void boot(); }, [boot]);
@@ -193,7 +206,7 @@ export function App() {
   }, [auth.phase, desktopMode, notify]);
 
   const authToast = toast && <div className={`toast ${toast.kind}`} role="status" aria-live="assertive">{toast.message}</div>;
-  if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>WPAI cihaz bağlantısı hazırlanıyor…</p></Centered>{authToast}</>;
+  if (auth.phase === 'loading') return <><Centered><div className="loader" /><p>Kayıtlı cihaz oturumu kontrol ediliyor…</p></Centered>{authToast}</>;
   if (auth.phase === 'unsupported') return <><Centered><section className="auth-card"><div className="auth-logo" aria-hidden="true">W</div><h1>WPAI Masaüstü Uygulaması</h1><p>Bu yönetim paneli güvenli cihaz oturumu ile çalışır. Kullanıcı adı, e-posta veya parola girişi kullanılmaz.</p></section></Centered>{authToast}</>;
   if (auth.phase === 'connections') return <><DesktopConnectionsPage
     connection={cloudflareConnection}
@@ -256,6 +269,7 @@ function DesktopConnectionsPage({
   onReady: (admin: Admin) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [autoAttempted, setAutoAttempted] = useState(false);
   const [connectionError, setConnectionError] = useState(initialError);
   useEffect(() => { setConnectionError(initialError); }, [initialError]);
 
@@ -285,6 +299,14 @@ function DesktopConnectionsPage({
       setBusy(false);
     }
   }
+
+
+  useEffect(() => {
+    if (!online || autoAttempted) return;
+    setAutoAttempted(true);
+    const timer = window.setTimeout(() => { void retryAutomaticConnection(); }, 100);
+    return () => window.clearTimeout(timer);
+  }, [autoAttempted, online]);
 
   async function openOauthLogin() {
     if (!online) {
@@ -360,7 +382,7 @@ function DesktopConnectionsPage({
               <div><span>İnternet</span><strong>{online ? 'Kullanılabilir' : 'Bağlantı bekleniyor'}</strong></div>
             </div>
             {needsOauthLogin && <p className="safe-note">Cloudflare oturumu bulunamadı. Aşağıdaki düğme Cloudflare’ın resmî giriş sayfasını varsayılan tarayıcıda açar; WPAI içine e-posta, parola veya API token girilmez.</p>}
-            {!needsOauthLogin && !connection.configured && <p className="safe-note">WPAI kayıtlı Wrangler oturumunu, production D1 migrasyonlarını ve Worker bağlantısını otomatik olarak doğruluyor.</p>}
+            {!needsOauthLogin && !connection.configured && <p className="safe-note">Ayarlar ekranı açık kalır; WPAI arka planda kayıtlı Wrangler OAuth oturumunu ve production Worker bağlantısını kısa süreli olarak doğrular. Uygulama açılışında npm kurulumu, build veya deploy çalıştırılmaz.</p>}
             {connectionError && !needsOauthLogin && <p className="safe-note" role="alert">{connectionError}</p>}
             <div className="form-actions">
               {needsOauthLogin

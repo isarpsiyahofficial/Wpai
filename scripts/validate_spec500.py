@@ -94,7 +94,9 @@ def validate_critical_runtime_gates() -> None:
         "openCloudflareBrowserLogin",
         "Cloudflare Oturumunu Aç",
         "Cihaz Bağlantısını Yeniden Dene",
-        "Kullanıcı adı, e-posta, parola veya Cloudflare API tokeni uygulamaya girilmez."
+        "Kullanıcı adı, e-posta, parola veya Cloudflare API tokeni uygulamaya girilmez.",
+        "restoreDesktopSession({ allowBootstrap: false })",
+        "setAutoAttempted(true)"
     )
     forbid(
         "src/frontend/App.tsx",
@@ -127,17 +129,19 @@ def validate_critical_runtime_gates() -> None:
         "desktop-bootstrap/oauth-device-bootstrap.mjs",
         "WRANGLER_OAUTH_REQUIRED",
         "wrangler(['whoami'])",
-        "wrangler(['login'])",
-        "applyMigrations",
-        "buildAndDeploy",
+        "wrangler(['login']",
+        "verifyWorkerHealth",
         "activationTicket",
-        "activateDevice"
+        "activateDevice",
+        "runtime', 'wrangler'"
     )
     require(
         "desktop-bootstrap/oauth-device-bootstrap.test.mjs",
         "existing Wrangler OAuth",
         "missing Wrangler OAuth",
-        "never receives administrator credentials"
+        "never receives administrator credentials",
+        "without npm install",
+        "unhealthy production"
     )
     require(
         "src-tauri/src/oauth_bootstrap.rs",
@@ -145,6 +149,9 @@ def validate_critical_runtime_gates() -> None:
         "cloudflare_oauth_login",
         "oauth-device-bootstrap.mjs"
     )
+    forbid("desktop-bootstrap/oauth-device-bootstrap.mjs", "npm(['ci'", "buildAndDeploy", "wrangler(['deploy'", "d1', 'migrations")
+    require(".github/workflows/windows-desktop.yml", "runtimeNpmInstallRequired = $false", "Packaged Wrangler runtime")
+    require(".github/workflows/windows-oauth-runtime.yml", "runtimeNpmInstallRequired = $false", "runtimeDeployRequired = $false")
     require("src/frontend/desktop.ts", "cloudflareAutoBootstrap", "cloudflareOauthLogin")
     require("src/frontend/api.ts", "bootstrapViaWranglerOAuth", "openCloudflareBrowserLogin", "bootstrapNewDesktopSession")
     require(
