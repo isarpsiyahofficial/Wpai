@@ -15,8 +15,7 @@ function makeFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-oauth-bootstrap-'));
   const project = path.join(root, 'project');
   fs.mkdirSync(project, { recursive: true });
-  const fakeNpm = path.join(root, 'fake-npm.mjs');
-  fs.writeFileSync(fakeNpm, 'process.exit(0);\n');
+  fs.writeFileSync(path.join(project, 'wrangler.jsonc'), JSON.stringify({ account_id: ACCOUNT_ID }));
   const fakeWrangler = path.join(root, 'fake-wrangler.mjs');
   fs.writeFileSync(fakeWrangler, `
 const args = process.argv.slice(2);
@@ -28,10 +27,12 @@ if (args[0] === 'whoami') {
   console.log('Account ID: ${ACCOUNT_ID}'); process.exit(0);
 }
 if (args[0] === 'login') { console.log('OAuth login complete'); process.exit(0); }
-if (args[0] === 'd1' || args[0] === 'deploy') { console.log('ok'); process.exit(0); }
+if (args[0] === 'deploy') { console.error('deploy must never run during desktop first-run'); process.exit(19); }
+if (args[0] === 'd1' && args[1] === 'migrations') { console.error('migrations must never run during desktop first-run'); process.exit(20); }
+if (args[0] === 'd1' && args[1] === 'execute') { console.log('ok'); process.exit(0); }
 console.error('unexpected wrangler args', args.join(' ')); process.exit(2);
 `);
-  return { root, project, fakeNpm, fakeWrangler };
+  return { root, project, fakeWrangler };
 }
 
 async function runBootstrap(fixture, input, extraEnv = {}) {
@@ -42,9 +43,9 @@ async function runBootstrap(fixture, input, extraEnv = {}) {
         WPAI_BOOTSTRAP_ROOT: fixture.root,
         WPAI_PROJECT_DIR: fixture.project,
         WPAI_NODE_PATH: process.execPath,
-        WPAI_NPM_CLI: fixture.fakeNpm,
         WPAI_WRANGLER_BIN: fixture.fakeWrangler,
-        WPAI_BOOTSTRAP_SKIP_NPM: '1',
+        WPAI_BOOTSTRAP_COMMAND_TIMEOUT_MS: '5000',
+        WPAI_BOOTSTRAP_REQUEST_TIMEOUT_MS: '2000',
         ...extraEnv
       },
       stdio: ['pipe', 'pipe', 'pipe']
@@ -67,10 +68,15 @@ async function withWorker(handler, fn) {
   finally { await new Promise(resolve => server.close(resolve)); }
 }
 
-test('existing Wrangler OAuth deploys and creates a device session without email, password or API token input', async () => {
+test('existing Wrangler OAuth creates a device session without npm install, deploy, migrations or credential input', async () => {
   const fixture = makeFixture();
   try {
     await withWorker(async (req, res) => {
+      if (req.method === 'GET' && req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, components: { worker: true, d1: true } }));
+        return;
+      }
       let raw = '';
       for await (const chunk of req) raw += chunk;
       const body = JSON.parse(raw || '{}');
@@ -91,6 +97,7 @@ test('existing Wrangler OAuth deploys and creates a device session without email
         refreshExpiresAt: '2099-02-01T00:00:00.000Z'
       } }));
     }, async workerUrl => {
+      const started = Date.now();
       const result = await runBootstrap(fixture, {
         action: 'bootstrap',
         deviceId: `device-${'1'.repeat(40)}`,
@@ -104,8 +111,10 @@ test('existing Wrangler OAuth deploys and creates a device session without email
       assert.equal(result.code, 0, result.stderr || result.stdout);
       assert.equal(result.body.ok, true);
       assert.equal(result.body.mode, 'wrangler_oauth_device');
+      assert.equal(result.body.version, 'wrangler-oauth-device-v2');
       assert.ok(result.body.session.refreshToken.startsWith('refresh-'));
       assert.equal(result.stdout.includes('expired-token'), false);
+      assert.ok(Date.now() - started < 5000, 'mock first-run bootstrap should be bounded and fast');
     });
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -140,6 +149,28 @@ test('OAuth login action uses Wrangler login and never receives administrator cr
     assert.equal(result.body.ok, true);
     assert.equal(result.body.mode, 'wrangler_oauth');
     assert.doesNotMatch(result.stdout, /expired-token/i);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('unhealthy production fails clearly instead of trying to build or deploy from the desktop app', async () => {
+  const fixture = makeFixture();
+  try {
+    await withWorker((req, res) => {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false }));
+    }, async workerUrl => {
+      const result = await runBootstrap(fixture, {
+        action: 'bootstrap',
+        deviceId: `device-${'3'.repeat(40)}`,
+        deviceName: 'WPAI Windows',
+        appVersion: '1.3.6'
+      }, { WPAI_WORKER_URL: workerUrl });
+      assert.equal(result.code, 1);
+      assert.match(result.body.error, /PRODUCTION_NOT_READY/);
+      assert.match(result.body.error, /açılışında deploy yapılmaz/);
+    });
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
