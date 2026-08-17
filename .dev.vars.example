@@ -1,0 +1,10 @@
+# Gerçek değerleri bu dosyaya yazmayın. Yerel geliştirme için kopyasını .dev.vars adıyla oluşturun.
+META_ACCESS_TOKEN=replace-with-local-test-value
+META_APP_SECRET=replace-with-local-test-value
+META_WHATSAPP_PHONE_NUMBER_ID=replace-with-local-test-value
+META_WHATSAPP_BUSINESS_ACCOUNT_ID=replace-with-local-test-value
+WHATSAPP_VERIFY_TOKEN=replace-with-random-local-test-value
+ADMIN_WHATSAPP_PHONE=+900000000000
+SESSION_SIGNING_KEY=replace-with-at-least-48-random-bytes
+DATA_ENCRYPTION_KEY=replace-with-32-byte-base64-key
+ADMIN_BOOTSTRAP_TOKEN=replace-with-one-time-random-bootstrap-token

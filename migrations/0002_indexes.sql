@@ -1,0 +1,27 @@
+CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone_e164);
+CREATE INDEX IF NOT EXISTS idx_contacts_status_updated ON contacts(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_contact ON conversations(contact_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message ON conversations(last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_unread ON conversations(unread_count DESC, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_meta_unique ON messages(meta_message_id) WHERE meta_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_unique ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_status_meta ON message_status_events(meta_message_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attachments_conversation ON attachments(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_status ON business_knowledge(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_hash ON knowledge_chunks(content_hash);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_handoffs_status ON human_handoffs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON admin_notifications(status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe_open ON admin_notifications(deduplication_key)
+  WHERE deduplication_key IS NOT NULL AND status IN ('unread','in_progress','snoozed');
+CREATE INDEX IF NOT EXISTS idx_follow_up_due ON follow_up_tasks(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_admin_active ON admin_sessions(admin_id, expires_at) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_login_attempts_window ON login_attempts(email_hash, ip_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_webhook_received ON webhook_events(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_requirements_contact ON customer_requirements(contact_id);
+CREATE INDEX IF NOT EXISTS idx_notes_contact ON customer_notes(contact_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_optouts_contact ON opt_outs(contact_id, scope) WHERE revoked_at IS NULL;

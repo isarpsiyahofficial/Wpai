@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+worker-configuration.d.ts
+src-tauri/target/
+src-tauri/gen/
+sidecar/dist/
+sidecar/build/
+*.pem
+*.key
+*.pfx
+# Generated only during Windows packaging
+desktop-bootstrap/runtime/
+desktop-bootstrap/project/

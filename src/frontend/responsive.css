@@ -1,0 +1,102 @@
+/* Responsive hardening loaded after the base styles. These rules prevent
+   production-sized Turkish content, identifiers and numeric values from
+   widening cards or overlapping adjacent controls. */
+.app-shell,.main,.content,.page-stack,.panel,.hero,.topbar,.top-actions,.panel-heading,.metrics,.metric,.grid-two,.form-grid,.inline-fields,.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p,.webhook,.wa-layout,.conversation-list,.chat-panel,.customer-panel,.training-layout,.training-page,.training-sessions{min-width:0}
+.topbar>div,.hero>div,.panel-heading>div,.notification>div,.knowledge-list article>div,.catalog-row>span,.key-value>*,.key-list p>*,.webhook>*{min-width:0}
+h1,h2,h3,h4,p,span,strong,small,label,a,button,code{overflow-wrap:anywhere}
+.metric strong{font-size:clamp(18px,2.2vw,25px);line-height:1.15;word-break:break-word}
+.notification p,.knowledge-list p,.summary-box p,.bubble p,.catalog-row small,.infra-grid p{word-break:break-word}
+.notification,.knowledge-list article,.catalog-row,.key-value,.key-list p{align-items:flex-start}
+.notification select{max-width:100%;min-width:130px}
+.button{white-space:normal;text-align:center;line-height:1.25}
+.webhook code{white-space:normal;word-break:break-all;overflow-wrap:anywhere}
+.chat-header>div{min-width:0}
+.chat-header h3,.chat-header p{overflow-wrap:anywhere}
+.bubble{min-width:0;word-break:break-word}
+.bubble a{word-break:break-all}
+.neuron-source-note,.neuron-quota-row span{overflow-wrap:anywhere}
+.neuron-history th,.neuron-history td{white-space:normal;min-width:90px}
+.toast{overflow-wrap:anywhere}
+.csv-file-input{display:block;width:100%;max-width:100%;min-width:0;overflow:hidden;color:var(--muted)}
+.csv-file-input::file-selector-button{max-width:100%;white-space:normal;margin-right:10px;padding:9px 12px;border:1px solid var(--border);border-radius:9px;background:#17223a;color:var(--text);font:inherit;cursor:pointer}
+.file-commit{min-width:0;max-width:100%}
+.table-panel{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.table-panel table{min-width:760px}
+.table-panel th,.table-panel td{overflow-wrap:normal;word-break:normal;white-space:normal}
+.table-panel td small,.table-panel td a{overflow-wrap:anywhere;word-break:break-word}
+.brand-image{width:38px;height:38px;border-radius:11px;object-fit:contain;background:#fff;flex:0 0 auto}
+.training-layout{display:grid;grid-template-columns:minmax(260px,330px) minmax(0,1fr);gap:18px;align-items:start}
+.training-sessions{position:sticky;top:108px;max-height:calc(100vh - 130px);display:flex;flex-direction:column;overflow:hidden}
+.training-sessions .conversation-scroll{max-height:520px}
+.training-page pre{white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;background:#0b1220;border:1px solid var(--border);border-radius:10px;padding:12px}
+.training-page .knowledge-list article.selected{border-color:#7657ff;box-shadow:0 0 0 1px rgba(118,87,255,.25)}
+.training-page .knowledge-list article>div:first-child{cursor:pointer;flex:1}
+.training-page .danger-panel.training-clear{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,420px);gap:20px}
+.file-button{display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+
+@media(max-width:1100px){
+  .training-layout{grid-template-columns:1fr}
+  .training-sessions{position:static;max-height:none}
+  .training-sessions .conversation-scroll{max-height:340px}
+}
+
+@media(max-width:840px){
+  .sidebar{min-width:0}
+  .sidebar nav{max-width:100%;scrollbar-width:thin;padding-bottom:5px}
+  .sidebar nav button{flex:0 0 auto}
+  .topbar>div:first-child{width:100%}
+  .top-actions{max-width:100%}
+  .panel-heading.compact .search,.search{max-width:100%;width:100%}
+  .chat-header{gap:10px;flex-wrap:wrap}
+  .training-page .danger-panel.training-clear{grid-template-columns:1fr}
+}
+
+@media(max-width:620px){
+  .notification,.knowledge-list article,.catalog-row,.key-value,.key-list p{flex-direction:column;gap:8px}
+  .notification select,.knowledge-list article>.text-button,.catalog-row>b{width:100%}
+  .chat-header{align-items:flex-start;flex-direction:column}
+  .chat-header .pill{max-width:100%}
+  .bar-list>div{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px}
+  .bar-list>div>div{grid-column:1/-1;grid-row:2}
+  .bar-list>div>strong{justify-self:end}
+  .form-actions{width:100%}
+  .form-actions .button{flex:1 1 180px}
+  .toast{left:12px;right:12px;bottom:12px;max-width:none}
+  .table-panel{position:relative}
+  .table-panel table{min-width:720px}
+  .training-page .knowledge-list article .form-actions{justify-content:stretch}
+  .training-page .knowledge-list article .form-actions>*{flex:1 1 160px}
+}
+
+@media(max-width:520px){
+  .metrics{grid-template-columns:1fr}
+  .content{padding:12px}
+  .panel{padding:16px}
+  .hero{padding:20px}
+  .topbar{padding:14px 16px}
+  .top-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%}
+  .top-actions .pill{grid-column:1/-1;justify-content:center}
+  .top-actions .button{width:100%}
+  .hero-actions,.hero-actions .button{width:100%}
+  .composer>div{width:100%}
+  .composer>div .button{width:100%}
+  .auth-card{padding:20px;overflow:hidden}
+  .webhook{padding:10px}
+  .csv-file-input::file-selector-button{display:block;width:100%;margin:0 0 8px}
+  .training-page input[type=file]{max-width:100%}
+}
+
+@media(max-width:360px){
+  .content{padding:9px}
+  .panel{padding:14px;border-radius:13px}
+  .sidebar{padding-left:8px;padding-right:8px}
+  .topbar h1{font-size:20px}
+  .hero h2{font-size:23px}
+}
+
+/* This file is part of the mandatory final-head responsive quality gate. */
+
+.offline-shell{min-height:100vh;background:var(--bg);padding:28px}.offline-header{max-width:1100px;margin:0 auto 20px;display:flex;align-items:center;justify-content:space-between;gap:20px}.offline-header h1{margin:10px 0 6px}.offline-header p{margin:0;color:var(--muted);max-width:760px}.offline-content{max-width:1100px;margin:0 auto}.local-index-search{margin:18px 0}.local-search-results{display:grid;gap:10px;margin:16px 0}.local-search-results .summary-box{margin:0}.local-search-results .pill{margin-left:8px}.local-search-results small{color:var(--muted)}.advanced-status{margin-top:16px;border-top:1px solid var(--border);padding-top:12px}.advanced-status summary{cursor:pointer;color:var(--muted)}
+@media(max-width:700px){.offline-shell{padding:16px}.offline-header{align-items:flex-start;flex-direction:column}.offline-header .button{width:100%}}
+.impact-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}.impact-comparison .safe-note{grid-column:1/-1}.training-impact textarea{resize:vertical}
+@media(max-width:760px){.impact-comparison{grid-template-columns:1fr}.impact-comparison .safe-note{grid-column:auto}}

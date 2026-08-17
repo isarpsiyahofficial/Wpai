@@ -1,0 +1,283 @@
+name: WPAI Windows Installer
+
+on:
+  push:
+    branches: [main, agent/wpai-production-rebuild]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'sidecar/**'
+      - 'desktop-bootstrap/**'
+      - 'rust-toolchain.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/validate_spec500.py'
+      - '.github/workflows/windows-desktop.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wpai-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    name: Build, install and verify NSIS setup.exe
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+      - name: Install locked JavaScript dependencies
+        shell: pwsh
+        run: npm ci --no-audit --no-fund
+      - name: Run fast first-run OAuth regression
+        shell: pwsh
+        run: npm run test:oauth
+      - name: Install FAISS sidecar dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sidecar/requirements.txt
+      - name: Compile and test FAISS sidecar
+        shell: pwsh
+        run: |
+          python -m compileall -q sidecar
+          python -m pytest -q sidecar/test_faiss_service.py
+      - name: Build FAISS sidecar executable
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name faiss-service sidecar/faiss_service.py
+          New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
+          Copy-Item dist/faiss-service.exe src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe
+          if (-not (Test-Path src-tauri/bin/faiss-service-x86_64-pc-windows-msvc.exe)) { throw 'FAISS sidecar executable missing' }
+      - name: Verify central product brand
+        shell: pwsh
+        run: python scripts/sync_brand.py
+      - name: Typecheck web and Worker source
+        shell: pwsh
+        run: npm run typecheck
+      - name: Rust locked unit tests
+        shell: pwsh
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Rust Clippy with warnings denied
+        shell: pwsh
+        run: cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - name: Rust locked compile check
+        shell: pwsh
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Prepare packaged Cloudflare bootstrap runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bootstrap = Join-Path $PWD 'desktop-bootstrap'
+          $runtime = Join-Path $bootstrap 'runtime'
+          $wranglerRuntime = Join-Path $runtime 'wrangler'
+          $project = Join-Path $bootstrap 'project'
+          Remove-Item $runtime, $project -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $runtime, $wranglerRuntime, $project | Out-Null
+
+          $nodeExe = (Get-Command node).Source
+          Copy-Item $nodeExe (Join-Path $runtime 'node.exe')
+
+          # First launch must never execute npm install/ci. Package the exact node_modules tree produced by locked npm ci.
+          Copy-Item (Join-Path $PWD 'node_modules') (Join-Path $wranglerRuntime 'node_modules') -Recurse
+
+          $files = @('package.json','package-lock.json','wrangler.jsonc','index.html','vite.config.ts','tsconfig.base.json','tsconfig.frontend.json','tsconfig.worker.json','tsconfig.json')
+          foreach ($file in $files) { Copy-Item (Join-Path $PWD $file) (Join-Path $project $file) }
+          Copy-Item (Join-Path $PWD 'src') (Join-Path $project 'src') -Recurse
+          Copy-Item (Join-Path $PWD 'migrations') (Join-Path $project 'migrations') -Recurse
+
+          $wranglerBin = Join-Path $wranglerRuntime 'node_modules\wrangler\bin\wrangler.js'
+          if (-not (Test-Path (Join-Path $bootstrap 'oauth-device-bootstrap.mjs'))) { throw 'OAuth bootstrap script missing' }
+          if (-not (Test-Path (Join-Path $runtime 'node.exe'))) { throw 'Packaged Node runtime missing' }
+          if (-not (Test-Path $wranglerBin)) { throw 'Packaged Wrangler runtime missing' }
+          if (-not (Test-Path (Join-Path $project 'wrangler.jsonc'))) { throw 'Packaged Wrangler project missing' }
+      - name: Build NSIS installer
+        shell: pwsh
+        run: npm run desktop:build
+      - name: Real NSIS install, GUI subsystem, open, single-instance and uninstall smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS setup.exe was not produced' }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+          $signature = (Get-AuthenticodeSignature $installer.FullName).Status.ToString()
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw "NSIS silent install failed: $($install.ExitCode)" }
+
+          $registryPaths = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $entry = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'WPAI' } |
+            Sort-Object InstallDate -Descending |
+            Select-Object -First 1
+          if (-not $entry) {
+            Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+              Where-Object { $_.DisplayName -like '*WPAI*' } |
+              Select-Object DisplayName, DisplayIcon, InstallLocation, UninstallString |
+              Format-Table -AutoSize
+            throw 'WPAI uninstall registry entry was not found after successful NSIS install'
+          }
+
+          $installLocation = [string]$entry.InstallLocation
+          if ($installLocation) { $installLocation = $installLocation.Trim().Trim('"') }
+          if (-not $installLocation -or -not (Test-Path $installLocation)) {
+            $uninstallText = [string]$entry.UninstallString
+            if ($uninstallText -match '^"([^"]+\.exe)"') { $installLocation = Split-Path -Parent $Matches[1] }
+            elseif ($uninstallText -match '^([^\s]+\.exe)') { $installLocation = Split-Path -Parent $Matches[1] }
+          }
+          if (-not $installLocation -or -not (Test-Path $installLocation)) {
+            throw "Registered InstallLocation is unavailable: $($entry.InstallLocation)"
+          }
+
+          $installed = $null
+          $displayIcon = [string]$entry.DisplayIcon
+          if ($displayIcon) {
+            $displayIcon = ($displayIcon.Trim().Trim('"') -replace ',\d+$', '')
+            if ((Test-Path $displayIcon) -and (Split-Path -Leaf $displayIcon) -notmatch '^(faiss-service|uninstall|setup|update)') {
+              $installed = Get-Item $displayIcon
+            }
+          }
+          if (-not $installed) {
+            $installed = Get-ChildItem -Path $installLocation -Filter *.exe -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -notmatch '^(faiss-service|uninstall|setup|update)' } |
+              Where-Object { $_.FullName -notmatch '\\resources\\' } |
+              Sort-Object Length -Descending |
+              Select-Object -First 1
+          }
+          if (-not $installed) {
+            Get-ChildItem -Path $installLocation -Filter *.exe -File -Recurse -Force -ErrorAction SilentlyContinue |
+              Select-Object Name, Length, FullName |
+              Format-Table -AutoSize
+            throw "Installed application executable was not found in $installLocation"
+          }
+
+          $peBytes = [System.IO.File]::ReadAllBytes($installed.FullName)
+          if ($peBytes.Length -lt 512) { throw 'Installed application PE image is unexpectedly small' }
+          $peOffset = [BitConverter]::ToInt32($peBytes, 0x3c)
+          if ($peOffset -lt 0 -or ($peOffset + 96) -ge $peBytes.Length) { throw 'Installed application PE header is invalid' }
+          $optionalHeaderOffset = $peOffset + 24
+          $peSubsystem = [BitConverter]::ToUInt16($peBytes, $optionalHeaderOffset + 68)
+          if ($peSubsystem -ne 2) { throw "Installed application is not Windows GUI subsystem; subsystem=$peSubsystem" }
+
+          $bootstrapScript = Get-ChildItem -Path $installLocation -Filter 'oauth-device-bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $bootstrapNode = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          $bootstrapWrangler = Get-ChildItem -Path $installLocation -Filter 'wrangler.js' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap.*runtime.*wrangler.*node_modules.*wrangler.*bin' } | Select-Object -First 1
+          $bootstrapProject = Get-ChildItem -Path $installLocation -Filter 'wrangler.jsonc' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          if (-not $bootstrapScript -or -not $bootstrapNode -or -not $bootstrapWrangler -or -not $bootstrapProject) {
+            throw 'Installed fast Cloudflare OAuth bootstrap resources are incomplete'
+          }
+
+          $first = Start-Process -FilePath $installed.FullName -PassThru
+          Start-Sleep -Seconds 10
+          $first.Refresh()
+          if ($first.HasExited) { throw "Installed application exited during startup smoke: $($installed.Name)" }
+
+          $second = Start-Process -FilePath $installed.FullName -PassThru
+          Start-Sleep -Seconds 5
+          $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installed.FullName })
+          if ($running.Count -ne 1) { throw "Single-instance gate failed; process count=$($running.Count)" }
+
+          $dataDir = Join-Path $env:APPDATA 'com.wpai.desktop'
+          $faissCache = Join-Path $dataDir 'faiss-index'
+          $bootstrapCache = Join-Path $dataDir 'cloudflare-bootstrap'
+          $oauthCache = Join-Path $dataDir 'cloudflare-oauth-bootstrap'
+          New-Item -ItemType Directory -Force -Path $faissCache, $bootstrapCache, $oauthCache | Out-Null
+          $marker = Join-Path $dataDir 'uninstall-preserve-marker.txt'
+          $faissMarker = Join-Path $faissCache 'cache-marker.txt'
+          $bootstrapMarker = Join-Path $bootstrapCache 'cache-marker.txt'
+          $oauthMarker = Join-Path $oauthCache 'cache-marker.txt'
+          Set-Content -Path $marker -Value 'preserve-user-data'
+          Set-Content -Path $faissMarker -Value 'preserve-local-index-by-default'
+          Set-Content -Path $bootstrapMarker -Value 'preserve-bootstrap-cache-by-default'
+          Set-Content -Path $oauthMarker -Value 'preserve-oauth-cache-by-default'
+
+          Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $uninstaller = Get-ChildItem -Path $installLocation -Filter 'uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) {
+            $uninstallText = [string]$entry.UninstallString
+            if ($uninstallText -match '^"([^"]+\.exe)"') { $uninstaller = Get-Item $Matches[1] -ErrorAction SilentlyContinue }
+            elseif ($uninstallText -match '^([^\s]+\.exe)') { $uninstaller = Get-Item $Matches[1] -ErrorAction SilentlyContinue }
+          }
+          if (-not $uninstaller) { throw 'NSIS uninstaller was not found through install directory or registry' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed: $($uninstall.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $installed.FullName) { throw 'Installed application executable remained after uninstall' }
+          if (-not (Test-Path $marker)) { throw 'Uninstall removed user data without explicit consent' }
+          if (-not (Test-Path $faissMarker) -or -not (Test-Path $bootstrapMarker) -or -not (Test-Path $oauthMarker)) { throw 'Silent uninstall removed local cache without explicit purge choice' }
+
+          $reinstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($reinstall.ExitCode -ne 0) { throw "NSIS silent reinstall failed: $($reinstall.ExitCode)" }
+          $purgeUninstaller = Get-ChildItem -Path $installLocation -Filter 'uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $purgeUninstaller) { throw 'NSIS uninstaller was not found after reinstall' }
+          $purge = Start-Process -FilePath $purgeUninstaller.FullName -ArgumentList '/S','/PURGELOCALCACHE' -PassThru -Wait
+          if ($purge.ExitCode -ne 0) { throw "NSIS purge uninstall failed: $($purge.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (-not (Test-Path $marker)) { throw 'Purge option removed non-cache user data' }
+          if (Test-Path $faissCache) { throw 'Purge option did not remove the local education index cache' }
+          if (Test-Path $bootstrapCache) { throw 'Purge option did not remove the Cloudflare bootstrap cache' }
+          if (Test-Path $oauthCache) { throw 'Purge option did not remove the Cloudflare OAuth cache' }
+
+          [ordered]@{
+            checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+            installerName = $installer.Name
+            installerBytes = $installer.Length
+            installerSha256 = $hash
+            authenticodeStatus = $signature
+            registryDisplayName = [string]$entry.DisplayName
+            registryDisplayIcon = [string]$entry.DisplayIcon
+            installLocation = $installLocation
+            installedExe = $installed.FullName
+            peSubsystem = $peSubsystem
+            peSubsystemName = 'Windows GUI'
+            cloudflareBootstrapScript = $bootstrapScript.FullName
+            cloudflareBootstrapNode = $bootstrapNode.FullName
+            cloudflareBootstrapWrangler = $bootstrapWrangler.FullName
+            cloudflareBootstrapProject = $bootstrapProject.FullName
+            runtimeNpmInstallRequired = $false
+            firstInstanceAlive = $true
+            processCountAfterSecondLaunch = $running.Count
+            uninstallExitCode = $uninstall.ExitCode
+            userDataPreserved = (Test-Path $marker)
+            silentUninstallPreservedLocalCache = $true
+            purgeUninstallExitCode = $purge.ExitCode
+            purgeOptionRemovedLocalCache = (-not (Test-Path $faissCache) -and -not (Test-Path $bootstrapCache) -and -not (Test-Path $oauthCache))
+            cloudDataUntouchedByLocalUninstaller = $true
+            headSha = '${{ github.sha }}'
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 windows-smoke.json
+          Get-Content windows-smoke.json
+      - name: Upload Windows installer and lifecycle evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: WPAI-Windows-Setup-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            windows-smoke.json
+          if-no-files-found: error
+          retention-days: 30

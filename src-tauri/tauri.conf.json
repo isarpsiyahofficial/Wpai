@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WPAI",
+  "version": "1.3.6",
+  "identifier": "com.wpai.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist/web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "WPAI - WhatsApp ve AI Yönetimi",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1100,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "wpai-local"
+      ],
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://wa-ai-panel.wa-ai-panel.workers.dev; font-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "WPAI",
+    "category": "Business",
+    "shortDescription": "WhatsApp müşteri görüşmeleri ve AI yönetimi",
+    "longDescription": "Cloudflare bağlantısını, WhatsApp Business görüşmelerini ve yapay zekâ yönetimini tek Windows uygulamasında güvenli cihaz oturumuyla yöneten WPAI istemcisi.",
+    "externalBin": [
+      "bin/faiss-service"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "displayLanguageSelector": true,
+        "installMode": "currentUser",
+        "languages": [
+          "Turkish",
+          "English"
+        ],
+        "installerHooks": "./windows/installer-hooks.nsh"
+      }
+    },
+    "resources": {
+      "../desktop-bootstrap/": "cloudflare-bootstrap/"
+    },
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}

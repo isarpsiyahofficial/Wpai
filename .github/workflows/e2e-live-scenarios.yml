@@ -1,0 +1,152 @@
+name: WPAI Live-like and Responsive Scenarios
+
+on:
+  push:
+    branches: [main, agent/wpai-production-rebuild]
+    paths:
+      - 'src/**'
+      - 'tests/e2e/**'
+      - 'migrations/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'wrangler.jsonc'
+      - 'vite.config.ts'
+      - '.github/workflows/e2e-live-scenarios.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wpai-live-like-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  responsive-browser:
+    name: Responsive browser, overlap and workflow checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install pinned Playwright test runner
+        run: npm install --no-save --package-lock=false --no-audit --no-fund @playwright/test@1.55.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build isolated E2E browser layout assets
+        run: VITE_WPAI_E2E=1 npm run build
+      - name: Start preview, verify port and run populated browser scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx vite preview --host 127.0.0.1 --port 4173 --strictPort > vite-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4173/ > /tmp/wpai-preview.html; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            cat vite-preview.log >&2
+            exit 1
+          fi
+          grep -q '<div id="root"></div>' /tmp/wpai-preview.html
+          npx playwright test --config=tests/e2e/playwright.config.mjs
+      - name: Upload responsive screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WPAI-Responsive-Evidence-${{ github.sha }}
+          path: |
+            tests/e2e/test-results
+            tests/e2e/playwright-report
+            vite-preview.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  live-worker-http:
+    name: Local Wrangler production-like HTTP, D1, R2 and webhook flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build production assets
+        run: npm run build
+      - name: Create ephemeral production-like secrets
+        shell: bash
+        run: |
+          cat > .dev.vars <<'EOF'
+          SESSION_SIGNING_KEY=live-like-session-signing-key-that-is-long-enough-1234567890
+          DATA_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+          ADMIN_BOOTSTRAP_TOKEN=live-like-bootstrap-token-1234567890
+          EOF
+      - name: Apply all D1 migrations to a clean persistent local database
+        run: npx wrangler d1 migrations apply wa-ai-prod --local --persist-to .wrangler/live-smoke --experimental-provision=false --experimental-auto-create=false
+      - name: Start Wrangler and execute real HTTP smoke flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler dev --local --ip 127.0.0.1 --port 8787 --persist-to .wrangler/live-smoke --experimental-provision=false --experimental-auto-create=false > wrangler-live.log 2>&1 &
+          worker_pid=$!
+          trap 'kill "$worker_pid" 2>/dev/null || true' EXIT
+          node tests/e2e/live-worker-smoke.mjs | tee live-worker-smoke.json
+          sleep 1
+          if grep -q 'Uncaught Error' wrangler-live.log || grep -q '"level":"error"' wrangler-live.log; then
+            echo 'Unexpected Worker error found in live-like Wrangler log.' >&2
+            cat wrangler-live.log >&2
+            exit 1
+          fi
+      - name: Upload local production-like evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WPAI-Live-Worker-Evidence-${{ github.sha }}
+          path: |
+            wrangler-live.log
+            live-worker-smoke.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  node24-compatibility:
+    name: Alternative Node 24 full code path
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Compile Python sources
+        run: python -m compileall -q scripts sidecar
+      - name: Run independent full application checks
+        run: |
+          npm run security:scan
+          npm run validate
+          npm run typecheck
+          npm run test
+          npm run build
+          npm run deploy:dry

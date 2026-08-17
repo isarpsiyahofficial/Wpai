@@ -1,0 +1,17 @@
+fn main() {
+    println!("cargo:rerun-if-env-changed=WPAI_DESKTOP_ACTIVATION_TOKEN");
+
+    const COMMANDS: &[&str] = &[
+        "save_cloudflare_token",
+        "load_cloudflare_token",
+        "remove_cloudflare_token",
+        "faiss_health",
+        "faiss_upsert",
+        "faiss_search",
+        "cloudflare_auto_bootstrap",
+        "cloudflare_oauth_login",
+    ];
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    ).expect("Tauri build manifest could not be generated");
+}
