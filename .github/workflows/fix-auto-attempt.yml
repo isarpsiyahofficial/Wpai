@@ -1,0 +1,63 @@
+name: WPAI Fix Automatic Connection Effect
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - '.github/workflows/fix-auto-attempt.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Fix automatic connection effect
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/frontend/App.tsx')
+          text = p.read_text('utf-8')
+          old = '''  useEffect(() => {
+    if (!online || autoAttempted) return;
+    setAutoAttempted(true);
+    const timer = window.setTimeout(() => { void retryAutomaticConnection(); }, 100);
+    return () => window.clearTimeout(timer);
+  }, [autoAttempted, online]);
+'''
+          new = '''  useEffect(() => {
+    if (!online || autoAttempted) return;
+    setAutoAttempted(true);
+    void retryAutomaticConnection();
+  }, [autoAttempted, online]);
+'''
+          if old not in text:
+              raise SystemExit('automatic connection effect anchor missing')
+          p.write_text(text.replace(old, new, 1), 'utf-8')
+          PY
+          git diff --check
+      - name: Validate focused frontend and OAuth gates
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run test:oauth
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/App.tsx
+          git commit -m 'Run automatic connection after Settings becomes visible'
+          git push origin HEAD:agent/wpai-production-rebuild
