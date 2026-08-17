@@ -26,7 +26,7 @@ jobs:
   oauth-runtime:
     name: Build and verify credential-free Wrangler OAuth package
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,7 +42,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
-      - name: Run Wrangler OAuth regression with stale provider-token environment present
+      - name: Run fast Wrangler OAuth regression with stale provider-token environment present
         shell: pwsh
         run: |
           $env:CLOUDFLARE_API_TOKEN = 'expired-token-must-not-win'
@@ -62,27 +62,27 @@ jobs:
         run: |
           cargo test --locked --manifest-path src-tauri/Cargo.toml
           cargo check --locked --manifest-path src-tauri/Cargo.toml
-      - name: Prepare packaged Cloudflare runtime
+      - name: Prepare packaged Cloudflare runtime with no first-run npm dependency
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $bootstrap = Join-Path $PWD 'desktop-bootstrap'
           $runtime = Join-Path $bootstrap 'runtime'
+          $wranglerRuntime = Join-Path $runtime 'wrangler'
           $project = Join-Path $bootstrap 'project'
           Remove-Item $runtime, $project -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $runtime, $project | Out-Null
+          New-Item -ItemType Directory -Force -Path $runtime, $wranglerRuntime, $project | Out-Null
           $nodeExe = (Get-Command node).Source
-          $nodeHome = Split-Path -Parent $nodeExe
           Copy-Item $nodeExe (Join-Path $runtime 'node.exe')
-          New-Item -ItemType Directory -Force -Path (Join-Path $runtime 'node_modules') | Out-Null
-          Copy-Item (Join-Path $nodeHome 'node_modules\npm') (Join-Path $runtime 'node_modules\npm') -Recurse
+          Copy-Item (Join-Path $PWD 'node_modules') (Join-Path $wranglerRuntime 'node_modules') -Recurse
           $files = @('package.json','package-lock.json','wrangler.jsonc','index.html','vite.config.ts','tsconfig.base.json','tsconfig.frontend.json','tsconfig.worker.json','tsconfig.json')
           foreach ($file in $files) { Copy-Item (Join-Path $PWD $file) (Join-Path $project $file) }
           Copy-Item (Join-Path $PWD 'src') (Join-Path $project 'src') -Recurse
           Copy-Item (Join-Path $PWD 'migrations') (Join-Path $project 'migrations') -Recurse
+          $wranglerBin = Join-Path $wranglerRuntime 'node_modules\wrangler\bin\wrangler.js'
           if (-not (Test-Path (Join-Path $bootstrap 'oauth-device-bootstrap.mjs'))) { throw 'OAuth bootstrap source missing' }
           if (-not (Test-Path (Join-Path $runtime 'node.exe'))) { throw 'Packaged Node runtime missing' }
-          if (-not (Test-Path (Join-Path $runtime 'node_modules\npm\bin\npm-cli.js'))) { throw 'Packaged npm runtime missing' }
+          if (-not (Test-Path $wranglerBin)) { throw 'Packaged Wrangler runtime missing' }
       - name: Build generic NSIS installer without embedded Cloudflare API token
         shell: pwsh
         run: |
@@ -90,7 +90,7 @@ jobs:
           Remove-Item Env:CF_API_TOKEN -ErrorAction SilentlyContinue
           Remove-Item Env:WPAI_DESKTOP_ACTIVATION_TOKEN -ErrorAction SilentlyContinue
           npm run desktop:build
-      - name: Install package and verify OAuth resources plus absence of API-token input source
+      - name: Install package and verify fast OAuth resources plus absence of API-token input source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -111,19 +111,26 @@ jobs:
           $oauth = Get-ChildItem -Path $installLocation -Filter 'oauth-device-bootstrap.mjs' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $node = Get-ChildItem -Path $installLocation -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
+          $wrangler = Get-ChildItem -Path $installLocation -Filter 'wrangler.js' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'cloudflare-bootstrap.*runtime.*wrangler.*node_modules.*wrangler.*bin' } | Select-Object -First 1
           $project = Get-ChildItem -Path $installLocation -Filter 'wrangler.jsonc' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'cloudflare-bootstrap' } | Select-Object -First 1
-          if (-not $oauth -or -not $node -or -not $project) { throw 'Installed Wrangler OAuth bootstrap resources incomplete' }
+          if (-not $oauth -or -not $node -or -not $wrangler -or -not $project) { throw 'Installed fast Wrangler OAuth bootstrap resources incomplete' }
           $appSource = Get-Content src/frontend/App.tsx -Raw
           $settingsSource = Get-Content src/frontend/pages/settings.tsx -Raw
+          $bootstrapSource = Get-Content desktop-bootstrap/oauth-device-bootstrap.mjs -Raw
           if ($appSource -match 'name="apiToken"' -or $settingsSource -match 'name="apiToken"') { throw 'Cloudflare API token input returned to product UI' }
           if ($appSource -notmatch 'Cloudflare Oturumunu Aç') { throw 'Browser OAuth recovery control missing' }
+          if ($bootstrapSource -match "npm\(\['ci'" -or $bootstrapSource -match 'buildAndDeploy' -or $bootstrapSource -match "wrangler\(\['deploy'") { throw 'First-run bootstrap still contains runtime install/deploy work' }
           $proof = [ordered]@{
             installer = $installer.Name
             installerSha256 = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
             oauthBootstrapInstalled = $true
             packagedNodeInstalled = $true
+            packagedWranglerInstalled = $true
             packagedWranglerProjectInstalled = $true
+            runtimeNpmInstallRequired = $false
+            runtimeDeployRequired = $false
             cloudflareApiTokenInputCount = 0
             browserOauthRecoveryPresent = $true
           }
