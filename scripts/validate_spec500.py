@@ -177,9 +177,9 @@ def validate_critical_runtime_gates() -> None:
     require("src/frontend/pages/training.tsx", "Canlı AI’a Etkisi", "Mevcut canlı cevap", "Taslak yayınlanırsa olası cevap")
     require("src/worker/vectorSync.ts", "totalSources", "completedJobs", "estimatedCostUsd", "estimatedRemainingSeconds")
     require("src/frontend/pages/training.tsx", "Tahmini indeks maliyeti", "Tahmini kalan süre", "Toplam bilgi parçası")
-    require("src-tauri/windows/installer-hooks.nsh", "NSIS_HOOK_PREUNINSTALL", "/PURGELOCALCACHE", "faiss-index", "cloudflare-bootstrap")
+    require("src-tauri/windows/installer-hooks.nsh", "NSIS_HOOK_PREUNINSTALL", "/PURGELOCALCACHE", "faiss-index", "cloudflare-bootstrap", "cloudflare-oauth-bootstrap")
     require("src-tauri/tauri.conf.json", "installerHooks", "installer-hooks.nsh")
-    require(".github/workflows/windows-desktop.yml", "purgeOptionRemovedLocalCache", "silentUninstallPreservedLocalCache", "peSubsystem")
+    require(".github/workflows/windows-desktop.yml", "purgeOptionRemovedLocalCache", "silentUninstallPreservedLocalCache", "peSubsystem", "cloudflare-oauth-bootstrap")
     require("tests/worker/training-vector.test.ts", "current and draft-assisted answer", "estimated cost and remaining time")
     require(
         "tests/e2e/offline-desktop.spec.mjs",
@@ -195,6 +195,7 @@ def validate_critical_runtime_gates() -> None:
         "existing Wrangler OAuth session",
         "Cloudflare Oturumunu Aç",
         "expired installer activation",
+        "slow automatic first-run never traps",
         'not.toHaveProperty(\'apiToken\')'
     )
     require("scripts/verify-installed-webview.mjs", "Gösterge Paneli", "WPAI Cihaz Bağlantısı", "cloudflareCredentialInputs: 0")
