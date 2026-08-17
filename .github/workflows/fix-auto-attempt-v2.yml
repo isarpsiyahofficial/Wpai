@@ -1,0 +1,41 @@
+name: WPAI Fix Automatic Connection Effect V2
+
+on:
+  push:
+    branches: [agent/wpai-production-rebuild]
+    paths:
+      - '.github/workflows/fix-auto-attempt-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wpai-production-rebuild
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply effect fix
+        run: python scripts/fix_auto_effect.py
+      - name: Validate focused gates
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run test:oauth
+          git diff --check
+      - name: Commit effect fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/App.tsx
+          git commit -m 'Run automatic connection after Settings becomes visible'
+          git push origin HEAD:agent/wpai-production-rebuild
