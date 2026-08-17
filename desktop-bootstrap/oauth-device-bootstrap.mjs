@@ -10,12 +10,11 @@ const WORKER_URL = (process.env.WPAI_WORKER_URL || 'https://wa-ai-panel.wa-ai-pa
 const ROOT = process.env.WPAI_BOOTSTRAP_ROOT || process.cwd();
 const PROJECT = process.env.WPAI_PROJECT_DIR || path.join(ROOT, 'project');
 const RUNTIME_NODE = process.env.WPAI_NODE_PATH || path.join(ROOT, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-const NPM_CLI = process.env.WPAI_NPM_CLI || path.join(ROOT, 'runtime', 'node_modules', 'npm', 'bin', 'npm-cli.js');
 const WRANGLER_BIN_OVERRIDE = process.env.WPAI_WRANGLER_BIN || '';
-const SKIP_NPM = process.env.WPAI_BOOTSTRAP_SKIP_NPM === '1';
-const COMMAND_TIMEOUT = Math.max(10_000, Number(process.env.WPAI_BOOTSTRAP_COMMAND_TIMEOUT_MS || 20 * 60_000));
-const REQUEST_TIMEOUT = Math.max(2_000, Number(process.env.WPAI_BOOTSTRAP_REQUEST_TIMEOUT_MS || 30_000));
-const VERSION = 'wrangler-oauth-device-v1';
+const COMMAND_TIMEOUT = Math.max(5_000, Number(process.env.WPAI_BOOTSTRAP_COMMAND_TIMEOUT_MS || 30_000));
+const LOGIN_TIMEOUT = Math.max(30_000, Number(process.env.WPAI_BOOTSTRAP_LOGIN_TIMEOUT_MS || 5 * 60_000));
+const REQUEST_TIMEOUT = Math.max(2_000, Number(process.env.WPAI_BOOTSTRAP_REQUEST_TIMEOUT_MS || 8_000));
+const VERSION = 'wrangler-oauth-device-v2';
 const PROVIDER_TOKEN_ENV = [
   'CLOUDFLARE_API_TOKEN',
   'CLOUDFLARE_API_KEY',
@@ -47,16 +46,21 @@ function childEnvironment(extra = {}, oauthOnly = false) {
   return result;
 }
 
-function run(command, args, cwd = PROJECT, env = {}, oauthOnly = false) {
+function run(command, args, cwd = PROJECT, env = {}, oauthOnly = false, timeout = COMMAND_TIMEOUT) {
   const result = spawnSync(command, args, {
     cwd,
     env: childEnvironment(env, oauthOnly),
     encoding: 'utf8',
     windowsHide: true,
-    timeout: COMMAND_TIMEOUT,
+    timeout,
     maxBuffer: 8 * 1024 * 1024
   });
-  if (result.error) fail('PROCESS_START_FAILED', `${path.basename(command)} başlatılamadı.`, result.error.message);
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      fail('PROCESS_TIMEOUT', `${path.basename(command)} zaman aşımına uğradı.`);
+    }
+    fail('PROCESS_START_FAILED', `${path.basename(command)} başlatılamadı.`, result.error.message);
+  }
   return {
     status: result.status ?? 1,
     stdout: safe(result.stdout),
@@ -68,31 +72,21 @@ function requireFile(file, code, label) {
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) fail(code, `${label} bulunamadı.`);
 }
 
-function npm(args) {
-  requireFile(RUNTIME_NODE, 'PACKAGED_NODE_MISSING', 'Paketlenmiş Node çalışma zamanı');
-  requireFile(NPM_CLI, 'PACKAGED_NPM_MISSING', 'Paketlenmiş npm çalışma zamanı');
-  return run(RUNTIME_NODE, [NPM_CLI, ...args]);
-}
-
 function wranglerPath() {
   if (WRANGLER_BIN_OVERRIDE) return WRANGLER_BIN_OVERRIDE;
-  return path.join(PROJECT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+  return path.join(ROOT, 'runtime', 'wrangler', 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 }
 
-function wrangler(args) {
+function ensureRuntime() {
+  requireFile(RUNTIME_NODE, 'PACKAGED_NODE_MISSING', 'Paketlenmiş Node çalışma zamanı');
+  requireFile(wranglerPath(), 'PACKAGED_WRANGLER_MISSING', 'Paketlenmiş Wrangler çalışma zamanı');
+  requireFile(path.join(PROJECT, 'wrangler.jsonc'), 'PROJECT_CONFIG_MISSING', 'WPAI Cloudflare yapılandırması');
+}
+
+function wrangler(args, timeout = COMMAND_TIMEOUT) {
   const bin = wranglerPath();
-  requireFile(bin, 'WRANGLER_MISSING', 'Wrangler');
-  return run(RUNTIME_NODE, [bin, ...args], PROJECT, {}, true);
-}
-
-function ensureDependencies() {
-  if (SKIP_NPM) return;
-  const lock = path.join(PROJECT, 'package-lock.json');
-  const manifest = path.join(PROJECT, 'package.json');
-  requireFile(lock, 'PROJECT_LOCK_MISSING', 'WPAI package-lock.json');
-  requireFile(manifest, 'PROJECT_MANIFEST_MISSING', 'WPAI package.json');
-  const installed = npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
-  if (installed.status !== 0) fail('NPM_CI_FAILED', 'WPAI bağlantı bileşenleri hazırlanamadı.', installed.stderr || installed.stdout);
+  requireFile(bin, 'PACKAGED_WRANGLER_MISSING', 'Paketlenmiş Wrangler çalışma zamanı');
+  return run(RUNTIME_NODE, [bin, ...args], PROJECT, {}, true, timeout);
 }
 
 function verifyWranglerOAuth() {
@@ -105,19 +99,21 @@ function verifyWranglerOAuth() {
   }
 }
 
-function applyMigrations() {
-  const result = wrangler([
-    'd1', 'migrations', 'apply', D1_NAME, '--remote',
-    '--experimental-provision=false', '--experimental-auto-create=false'
-  ]);
-  if (result.status !== 0) fail('D1_MIGRATION_FAILED', 'Production D1 migrasyonları uygulanamadı.', result.stderr || result.stdout);
-}
-
-function buildAndDeploy() {
-  const built = npm(['run', 'build']);
-  if (built.status !== 0) fail('WEB_BUILD_FAILED', 'WPAI üretim arayüzü hazırlanamadı.', built.stderr || built.stdout);
-  const deployed = wrangler(['deploy', '--strict', '--experimental-provision=false', '--experimental-auto-create=false']);
-  if (deployed.status !== 0) fail('WORKER_DEPLOY_FAILED', 'WPAI Worker güncellenemedi.', deployed.stderr || deployed.stdout);
+async function verifyWorkerHealth() {
+  try {
+    const response = await fetch(`${WORKER_URL}/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT)
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.ok !== true || body?.components?.worker !== true || body?.components?.d1 !== true) {
+      fail('PRODUCTION_NOT_READY', 'WPAI production Worker veya D1 hazır değil. Uygulama açılışında deploy yapılmaz; production sürümü CI üzerinden düzeltilmelidir.');
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('[PRODUCTION_NOT_READY]')) throw error;
+    fail('PRODUCTION_HEALTH_FAILED', 'WPAI production bağlantısı doğrulanamadı.', error instanceof Error ? error.message : error);
+  }
 }
 
 function activationTicket() {
@@ -125,7 +121,7 @@ function activationTicket() {
   const hash = crypto.createHash('sha256').update(token, 'utf8').digest('base64');
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const sql = `INSERT INTO desktop_activation_tokens (id,token_hash,bound_device_hash,status,expires_at,first_used_at,last_used_at,use_count,created_at) VALUES ('${id}','${hash}',NULL,'active','${expiresAt}',NULL,NULL,0,'${createdAt}');`;
   const inserted = wrangler([
     'd1', 'execute', D1_NAME, '--remote', '--command', sql,
@@ -142,7 +138,7 @@ function deleteTicket(id) {
 
 async function activateDevice(ticket, input) {
   let last = '';
-  for (let attempt = 0; attempt < 18; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await fetch(`${WORKER_URL}/api/auth/desktop/activate`, {
         method: 'POST',
@@ -164,7 +160,7 @@ async function activateDevice(ticket, input) {
     } catch (error) {
       last = safe(error instanceof Error ? error.message : error);
     }
-    await new Promise(resolve => setTimeout(resolve, 2_000));
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1_000));
   }
   deleteTicket(ticket.id);
   fail('DEVICE_ACTIVATION_FAILED', 'Production cihaz oturumu oluşturulamadı.', last);
@@ -178,8 +174,8 @@ function validInput(input) {
 }
 
 async function login() {
-  ensureDependencies();
-  const result = wrangler(['login']);
+  ensureRuntime();
+  const result = wrangler(['login'], LOGIN_TIMEOUT);
   if (result.status !== 0) fail('WRANGLER_OAUTH_LOGIN_FAILED', 'Cloudflare tarayıcı oturumu tamamlanamadı.', result.stderr || result.stdout);
   verifyWranglerOAuth();
   return { ok: true, mode: 'wrangler_oauth', version: VERSION };
@@ -187,10 +183,9 @@ async function login() {
 
 async function bootstrap(input) {
   if (!validInput(input)) fail('DEVICE_BOOTSTRAP_INVALID', 'Cihaz bağlantı isteği geçersiz.');
-  ensureDependencies();
+  ensureRuntime();
   verifyWranglerOAuth();
-  applyMigrations();
-  buildAndDeploy();
+  await verifyWorkerHealth();
   const ticket = activationTicket();
   const session = await activateDevice(ticket, input);
   return {
